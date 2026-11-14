@@ -35,7 +35,13 @@ def compute_grazing_sun_hours(lat_deg: float, obliquity_deg: float = 23.44) -> f
 
 
 def _is_earth_land(lat: float, lon: float) -> bool:
-    """Lightweight deterministic continental & major-island land mask."""
+    """Lightweight deterministic continental & major-island land mask.
+
+    Excludes |lat| > 84.5 deg to stay strictly inside Web Mercator's +-85.05 deg
+    tiling domain and avoid polar-cap polygon distortion in MapLibre GL JS.
+    """
+    if abs(lat) > 84.5:
+        return False
     # Antarctica
     if lat <= -64.0:
         return True
@@ -223,24 +229,14 @@ def _synthesize_earth_cell_parameters(lat: float, lon: float) -> dict[str, float
     }
 
 
-def _safe_hex_polygon(cell_id: str) -> list[list[float]]:
-    """Convert H3 cell boundary to GeoJSON [lon, lat] ring without antimeridian wrap spikes."""
+def _safe_hex_polygon(cell_id: str) -> list[list[float]] | None:
+    """Convert H3 cell boundary to GeoJSON [lon, lat] ring safe for Web Mercator & 3D Globe."""
     boundary = h3.cell_to_boundary(cell_id)  # list of (lat, lon)
     lons = [pt[1] for pt in boundary]
-    lats = [pt[0] for pt in boundary]
+    lats = [max(-84.95, min(84.95, pt[0])) for pt in boundary]
 
-    if max(lons) - min(lons) > 180.0:
-        # Unwrap across the antimeridian relative to the first vertex
-        ref = lons[0]
-        fixed_lons = []
-        for ln in lons:
-            diff = ln - ref
-            if diff > 180.0:
-                ln -= 360.0
-            elif diff < -180.0:
-                ln += 360.0
-            fixed_lons.append(ln)
-        lons = fixed_lons
+    if max(lons) - min(lons) > 90.0:
+        return None
 
     ring = [[round(ln, 4), round(lt, 4)] for ln, lt in zip(lons, lats)]
     ring.append(ring[0])
@@ -270,6 +266,10 @@ def build_earth_h3_grid(max_cells: int | None = None) -> tuple[list[EarthSite], 
     features: list[dict[str, Any]] = []
 
     for cell_id in adaptive_cells:
+        ring = _safe_hex_polygon(cell_id)
+        if ring is None:
+            continue
+
         lat, lon = h3.cell_to_latlng(cell_id)
         params = _synthesize_earth_cell_parameters(lat, lon)
         region_tag = (
@@ -291,7 +291,6 @@ def build_earth_h3_grid(max_cells: int | None = None) -> tuple[list[EarthSite], 
         )
         sites.append(site)
 
-        ring = _safe_hex_polygon(cell_id)
         features.append(
             {
                 "type": "Feature",

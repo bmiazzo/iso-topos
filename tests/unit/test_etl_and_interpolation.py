@@ -78,10 +78,12 @@ def test_adaptive_h3_earth_grid_builds_valid_geojson_and_parameters():
     for site in sites[:25]:
         assert set(site.parameters.keys()) == param_ids
 
-    for feat in geojson["features"][:50]:
+    for feat in geojson["features"]:
         ring = feat["geometry"]["coordinates"][0]
         lons = [pt[0] for pt in ring]
-        assert max(lons) - min(lons) < 180.0
+        lats = [pt[1] for pt in ring]
+        assert max(lons) - min(lons) <= 90.0
+        assert min(lats) >= -85.0 and max(lats) <= 85.0
 
 
 def test_scientific_sanity_lunar_south_pole_and_mars_astrobiology_rankings():

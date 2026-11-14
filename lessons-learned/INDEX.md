@@ -36,4 +36,4 @@ State the concrete check, invariant, or pattern to follow going forward.
 
 | Date | Lesson | Area / Tags | Summary |
 | :--- | :--- | :--- | :--- |
-| *(none yet)* | | | |
+| 2026-11-14 | [H3 Polar Cells & Web Mercator ±85.05° Distortion](2026-11-14-h3-polar-mercator-clipping.md) | `etl`, `h3`, `maplibre-globe` | Keep H3 GeoJSON polygons within `|lat| <= 84.95°` and `Δlon <= 90°` to avoid polar distortion in MapLibre v5 globe mode. |

@@ -322,6 +322,10 @@ function initEarthMap() {
 
   map.addControl(new maplibregl.NavigationControl(), "top-right");
 
+  map.on("style.load", () => {
+    map.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
+  });
+
   map.on("load", () => {
     map.addSource("earth-h3", {
       type: "geojson",
