@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>iso-topos — Planetary-to-Earth Analog Discovery</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">iso-topos</span>
+      <span class="brand-sub">Planetary → Earth Analog Engine</span>
+    </div>
+
+    <div class="topbar-controls">
+      <div class="segmented" role="group" aria-label="Planetary Body">
+        <button id="btn-body-moon" class="seg-btn active" data-body="moon">Moon</button>
+        <button id="btn-body-mars" class="seg-btn" data-body="mars">Mars</button>
+      </div>
+
+      <div class="segmented" role="group" aria-label="Interface Mode">
+        <button id="btn-mode-simple" class="seg-btn active" data-mode="simple">Simple Mode</button>
+        <button id="btn-mode-advanced" class="seg-btn" data-mode="advanced">Advanced Mode</button>
+      </div>
+
+      <label class="toggle-pill" title="Hide or dim well-known baselines (Atacama, Antarctica, Hawaii, Iceland, Haughton, Rio Tinto)">
+        <input type="checkbox" id="chk-novel-only" />
+        <span>Beyond Well-Known Sites</span>
+      </label>
+
+      <button id="btn-toggle-projection" class="action-btn">3D Globe: ON</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- Left Control Dock -->
+    <aside class="panel left-panel">
+      <section class="panel-section">
+        <h2>Target Selection</h2>
+        <label class="field-label" for="preset-select">Curated Mission Preset</label>
+        <select id="preset-select" class="select-input"></select>
+        <p id="preset-context" class="muted-note"></p>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-header-row">
+          <h2>Planetary Map Picker</h2>
+          <span id="extrapolation-badge" class="badge badge-neutral">Preset Exact</span>
+        </div>
+        <div class="planetary-picker-wrap">
+          <canvas id="planetary-picker-canvas" width="300" height="150" title="Click anywhere on Moon or Mars to extract parameters"></canvas>
+          <div class="coord-inputs">
+            <label>Lat (°) <input type="number" id="input-lat" step="0.1" min="-90" max="90" /></label>
+            <label>Lon (°E) <input type="number" id="input-lon" step="0.1" min="-180" max="360" /></label>
+            <button id="btn-extract-coord" class="small-btn">Extract</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Advanced Mode Controls (Hidden in Simple Mode) -->
+      <section id="advanced-controls" class="panel-section hidden">
+        <div class="section-header-row">
+          <h2>Advanced Evaluation</h2>
+          <div class="export-btns">
+            <button id="btn-export-csv" class="small-btn">CSV</button>
+            <button id="btn-export-json" class="small-btn">JSON</button>
+          </div>
+        </div>
+
+        <label class="field-label" for="scoring-mode-select">Envelope Mode</label>
+        <select id="scoring-mode-select" class="select-input">
+          <option value="clamped">Terrestrial-Envelope Clamped (Recommended)</option>
+          <option value="strict">Strict Unclamped Physical Distance</option>
+        </select>
+
+        <div class="filters-box">
+          <h3>Physical Range Filters</h3>
+          <div class="filter-grid">
+            <label>Max Slope (°) <input type="number" id="flt-max-slope" placeholder="Any" step="1" min="0" max="45" /></label>
+            <label>Min Temp (°C) <input type="number" id="flt-min-temp" placeholder="Any" step="5" /></label>
+            <label>Max Temp (°C) <input type="number" id="flt-max-temp" placeholder="Any" step="5" /></label>
+            <label>Min Aridity (0-1) <input type="number" id="flt-min-aridity" placeholder="Any" step="0.1" min="0" max="1" /></label>
+          </div>
+        </div>
+
+        <div id="all-zero-warning" class="alert-warn hidden">
+          All parameter weights are 0%. Enable at least one parameter to compute rankings.
+        </div>
+
+        <div id="parameter-weights-container"></div>
+      </section>
+    </aside>
+
+    <!-- Center 3D Earth Globe -->
+    <section class="map-stage">
+      <div id="earth-map"></div>
+
+      <!-- Floating Layer Switcher -->
+      <div class="map-overlay-card top-left-overlay">
+        <div class="overlay-row">
+          <label for="layer-variable-select">Globe Color Layer:</label>
+          <select id="layer-variable-select" class="select-input compact"></select>
+        </div>
+        <div class="overlay-row">
+          <label for="basemap-select">Satellite Imagery:</label>
+          <select id="basemap-select" class="select-input compact">
+            <option value="gibs_bluemarble">NASA GIBS Blue Marble</option>
+            <option value="gibs_modis">NASA GIBS MODIS Terra True Color</option>
+            <option value="dark_vector">Dark Scientific Base</option>
+          </select>
+        </div>
+        <div class="overlay-row">
+          <label for="hex-opacity">Hex Opacity:</label>
+          <input type="range" id="hex-opacity" min="0.15" max="0.95" step="0.05" value="0.72" />
+        </div>
+        <label class="overlay-check">
+          <input type="checkbox" id="chk-show-hotspots" checked />
+          <span>Show Local Hotspot Overlays (26)</span>
+        </label>
+      </div>
+
+      <!-- Colorblind-Safe Viridis Legend -->
+      <div class="map-overlay-card bottom-left-overlay">
+        <div id="legend-title" class="legend-title">Overall Similarity (%)</div>
+        <div class="viridis-bar"></div>
+        <div class="legend-ticks">
+          <span id="legend-min">0%</span>
+          <span id="legend-mid">50%</span>
+          <span id="legend-max">100%</span>
+        </div>
+        <div class="hotspot-legend">
+          <span><i class="dot dot-novel"></i> Novel Hotspot</span>
+          <span><i class="dot dot-baseline"></i> Well-Known Baseline</span>
+        </div>
+      </div>
+
+      <div id="hover-tooltip" class="hover-tooltip hidden"></div>
+    </section>
+
+    <!-- Right Breakdown & Rankings Drawer -->
+    <aside class="panel right-panel">
+      <section class="panel-section">
+        <div class="section-header-row">
+          <h2>Ranked Earth Analogs</h2>
+          <span id="eval-timing" class="muted-note"></span>
+        </div>
+        <div class="segmented small-seg">
+          <button id="tab-hotspots" class="seg-btn active">Local Hotspots</button>
+          <button id="tab-h3" class="seg-btn">Top H3 Regions</button>
+        </div>
+        <div id="ranked-list" class="ranked-list"></div>
+      </section>
+
+      <section id="breakdown-card" class="panel-section hidden">
+        <div class="section-header-row">
+          <div>
+            <h2 id="detail-name">Site Name</h2>
+            <p id="detail-meta" class="muted-note"></p>
+          </div>
+          <div id="detail-score-badge" class="score-pill">0%</div>
+        </div>
+
+        <p id="detail-notes" class="detail-notes"></p>
+
+        <div class="chart-wrap">
+          <canvas id="dimension-chart"></canvas>
+        </div>
+
+        <div class="breakdown-block">
+          <h3>Exploration & Testing Relevance</h3>
+          <ul id="detail-relevance" class="tag-list"></ul>
+        </div>
+
+        <div class="breakdown-block">
+          <h3>Earth-Limit Caveats</h3>
+          <div id="detail-caveats" class="caveat-list"></div>
+        </div>
+
+        <div class="breakdown-block">
+          <h3>Unit-Level Comparison & Provenance (DR-3)</h3>
+          <div class="table-scroll">
+            <table class="prov-table">
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  <th>Earth</th>
+                  <th>Target</th>
+                  <th>Sim</th>
+                  <th>Sources</th>
+                </tr>
+              </thead>
+              <tbody id="detail-comparison-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

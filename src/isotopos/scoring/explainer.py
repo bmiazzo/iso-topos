@@ -1,0 +1,203 @@
+"""Divergence breakdown, Earth-limit caveats, and exploration relevance (FR-11, parameters.md)."""
+
+from __future__ import annotations
+
+from isotopos.core.models import (
+    DimensionBreakdown,
+    EarthLimitCaveat,
+    EarthSite,
+    ParameterComparison,
+    PlanetaryBody,
+    TargetLocation,
+)
+from isotopos.core.registry import ParameterRegistry
+
+
+class DivergenceExplainer:
+    """Produces transparent scientific explanations for why an Earth site matches or diverges."""
+
+    def __init__(self, registry: ParameterRegistry) -> None:
+        self._registry = registry
+
+    def build_dimension_breakdowns(
+        self,
+        comparisons: list[ParameterComparison],
+    ) -> tuple[list[DimensionBreakdown], list[str], list[str]]:
+        """Aggregate parameter comparisons into per-dimension sub-scores with N/A guards."""
+        comp_by_dim: dict[str, list[ParameterComparison]] = {
+            d.id: [] for d in self._registry.dimensions
+        }
+        for comp in comparisons:
+            comp_by_dim[comp.dimension_id].append(comp)
+
+        breakdowns: list[DimensionBreakdown] = []
+        strongest: list[str] = []
+        diverging: list[str] = []
+
+        for dim in self._registry.dimensions:
+            dim_comps = comp_by_dim.get(dim.id, [])
+            active = [c for c in dim_comps if c.weight > 0.0]
+            total_w = sum(c.weight for c in active)
+            if total_w <= 0.0:
+                breakdowns.append(
+                    DimensionBreakdown(
+                        dimension_id=dim.id,
+                        dimension_name=dim.name,
+                        sub_score=None,
+                        active_parameter_count=0,
+                        status="N/A",
+                    )
+                )
+                continue
+
+            sub_score = sum(c.weight * c.similarity for c in active) / total_w
+            if sub_score >= 0.78:
+                status = "strong"
+                strongest.append(dim.name)
+            elif sub_score >= 0.55:
+                status = "moderate"
+            else:
+                status = "divergent"
+                diverging.append(dim.name)
+
+            breakdowns.append(
+                DimensionBreakdown(
+                    dimension_id=dim.id,
+                    dimension_name=dim.name,
+                    sub_score=round(sub_score, 4),
+                    active_parameter_count=len(active),
+                    status=status,
+                )
+            )
+
+        return breakdowns, strongest, diverging
+
+    def build_caveats(
+        self,
+        site: EarthSite,
+        target: TargetLocation,
+        comparisons: list[ParameterComparison],
+    ) -> list[EarthLimitCaveat]:
+        """Generate explicit Earth-limit caveats grounded in planetary physics (FR-11)."""
+        caveats: list[EarthLimitCaveat] = []
+
+        if target.body == PlanetaryBody.MOON:
+            caveats.extend(
+                [
+                    EarthLimitCaveat(
+                        category="gravity",
+                        title="Reduced Lunar Gravity (0.165 g)",
+                        explanation=(
+                            "Earth's 1.0 g gravity cannot reproduce lunar 1/6 g regolith cohesion, "
+                            "slope angle-of-repose stability, or rover traction/excavation loads."
+                        ),
+                    ),
+                    EarthLimitCaveat(
+                        category="atmosphere_vacuum",
+                        title="Hard Lunar Vacuum vs. Terrestrial Atmosphere",
+                        explanation=(
+                            "Earth's atmosphere causes convective heat transfer, weathering, and dust settling; "
+                            "on the Moon, electrostatic dust levitation and vacuum thermal radiation dominate."
+                        ),
+                    ),
+                    EarthLimitCaveat(
+                        category="illumination_scattering",
+                        title="Pitch-Black Shadows vs. Atmospheric Scattering",
+                        explanation=(
+                            "Rayleigh scattering on Earth illuminates shadowed slopes; lunar grazing sunlight "
+                            "(0-5 deg) casts zero-light black shadows that severely challenge optical landing & navigation."
+                        ),
+                    ),
+                ]
+            )
+        else:
+            caveats.extend(
+                [
+                    EarthLimitCaveat(
+                        category="gravity",
+                        title="Reduced Martian Gravity (0.38 g)",
+                        explanation=(
+                            "Martian 0.38 g alters aeolian dust saltation thresholds, slope failure mechanics, "
+                            "and lander/rover suspension loads relative to Earth."
+                        ),
+                    ),
+                    EarthLimitCaveat(
+                        category="atmosphere_co2",
+                        title="Thin 6 mbar CO2 Atmosphere",
+                        explanation=(
+                            "Earth's 1013 mbar N2/O2 atmosphere differs fundamentally from Mars' 6 mbar CO2 "
+                            "regime, affecting aerodynamic braking, convective cooling, and ISRU Sabatier testing."
+                        ),
+                    ),
+                    EarthLimitCaveat(
+                        category="radiation",
+                        title="Unshielded Surface Radiation",
+                        explanation=(
+                            "Mars lacks a global magnetosphere and thick ozone/atmosphere shield; terrestrial "
+                            "sites do not reproduce galactic cosmic ray and solar energetic particle fluxes."
+                        ),
+                    ),
+                ]
+            )
+
+        if (
+            target.parameters.get("subsurface_ice_permafrost", 0.0) >= 0.4
+            or site.parameters.get("subsurface_ice_permafrost", 0.0) >= 0.4
+        ):
+            caveats.append(
+                EarthLimitCaveat(
+                    category="ice_sublimation",
+                    title="Ice Sublimation vs. Terrestrial Melting",
+                    explanation=(
+                        "Under lunar vacuum or Mars' 6 mbar pressure, water ice sublimates directly from solid to vapor; "
+                        "most terrestrial permafrost sites degrade by liquid melting (except hyper-arid Antarctic valleys)."
+                    ),
+                )
+            )
+
+        out_of_env = [c for c in comparisons if c.out_of_envelope_delta > 0.0]
+        if out_of_env:
+            details = "; ".join(
+                f"{c.label}: target {c.target_value:.1f} {c.unit} exceeds Earth envelope by {c.out_of_envelope_delta:.1f} {c.unit}"
+                for c in out_of_env
+            )
+            caveats.append(
+                EarthLimitCaveat(
+                    category="envelope_exceeded",
+                    title="Planetary Extremes Beyond Earth's Physical Envelope",
+                    explanation=details,
+                )
+            )
+
+        return caveats
+
+    def build_exploration_relevance(
+        self,
+        site: EarthSite,
+        target: TargetLocation,
+    ) -> list[str]:
+        """Suggest concrete engineering, ISRU, and scientific test campaigns for the analog."""
+        relevance: list[str] = []
+        p = site.parameters
+
+        if p.get("anorthosite_highland_score", 0.0) >= 0.65:
+            relevance.append("Lunar Highland Anorthosite Regolith Simulant & Geochemistry Calibration")
+        if p.get("basalt_volcanic_score", 0.0) >= 0.65:
+            relevance.append("Volcanic Basalt Rover Mobility & In-Situ Sintering Trials")
+        if p.get("clay_carbonate_sediment_score", 0.0) >= 0.6:
+            relevance.append("Lacustrine Clay/Carbonate Sample Caching & Biosignature Extraction")
+        if p.get("low_sun_grazing_hours", 0.0) >= 1100.0:
+            relevance.append("Low-Sun Grazing-Angle (0-5 deg) Optical Navigation & Precision Landing Tests")
+        if p.get("subsurface_ice_permafrost", 0.0) >= 0.55:
+            relevance.append("Cryogenic Ice-Regolith Drilling, Coring & ISRU Water Extraction")
+        if p.get("subsurface_cave_drilling_score", 0.0) >= 0.65:
+            relevance.append("Subsurface Lava Tube / Cold-Trap Cave Robotics & Radiation-Shelter Ops")
+        if p.get("biosignature_preservation_score", 0.0) >= 0.65 and target.body == PlanetaryBody.MARS:
+            relevance.append("Extremophile & Microbialite Biosignature Detection Protocol Validation")
+        if p.get("slope_deg", 0.0) >= 18.0:
+            relevance.append("Steep Crater-Wall Ascent/Descent & Tethered Rover Mobility")
+
+        if not relevance:
+            relevance.append("General Terrain Traversability & Multi-Sensor Instrument Field Calibration")
+
+        return relevance
