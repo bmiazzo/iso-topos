@@ -197,9 +197,13 @@ def test_frontend_static_modules_and_collapsible_shell_served():
         "/static/app.js",
         "/static/js/state.js",
         "/static/js/api.js",
+        "/static/js/ui/dom.js",
         "/static/js/ui/collapsible.js",
         "/static/js/ui/menu_summaries.js",
+        "/static/js/components/starfield.js",
+        "/static/js/components/color_scale.js",
         "/static/js/components/globe_map.js",
+        "/static/js/components/target_panel.js",
         "/static/js/components/planetary_picker.js",
         "/static/js/components/advanced_panel.js",
         "/static/js/components/breakdown_panel.js",
@@ -207,5 +211,21 @@ def test_frontend_static_modules_and_collapsible_shell_served():
     ]
     for route in js_routes:
         assert client.get(route).status_code == 200, route
+
+
+def test_health_and_error_handling_endpoints():
+    """Verify /api/v1/health and 400/404 error responses for invalid IDs or payloads."""
+    client = _client()
+    health_resp = client.get("/api/v1/health")
+    assert health_resp.status_code == 200
+    assert health_resp.json()["status"] == "ok"
+
+    assert client.get("/api/v1/earth-grid/parameter/nonexistent_param").status_code == 404
+    assert client.post("/api/v1/target/extract", json={"preset_id": "nonexistent"}).status_code == 404
+    assert client.post("/api/v1/target/extract", json={"body": "moon"}).status_code == 400
+
+    preset = client.post("/api/v1/target/extract", json={"preset_id": "shackleton_rim"}).json()
+    assert client.post("/api/v1/site/unknown_site", json={"target": preset}).status_code == 404
+
 
 

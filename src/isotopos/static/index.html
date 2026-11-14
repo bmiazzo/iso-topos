@@ -18,13 +18,13 @@
 
     <div class="topbar-controls">
       <div class="segmented" role="group" aria-label="Planetary Body">
-        <button id="btn-body-moon" class="seg-btn active" data-body="moon">Moon</button>
-        <button id="btn-body-mars" class="seg-btn" data-body="mars">Mars</button>
+        <button id="btn-body-moon" type="button" class="seg-btn active" data-body="moon" aria-pressed="true">Moon</button>
+        <button id="btn-body-mars" type="button" class="seg-btn" data-body="mars" aria-pressed="false">Mars</button>
       </div>
 
       <div class="segmented" role="group" aria-label="Interface Mode">
-        <button id="btn-mode-simple" class="seg-btn active" data-mode="simple">Simple Mode</button>
-        <button id="btn-mode-advanced" class="seg-btn" data-mode="advanced">Advanced Mode</button>
+        <button id="btn-mode-simple" type="button" class="seg-btn active" data-mode="simple" aria-pressed="true">Simple Mode</button>
+        <button id="btn-mode-advanced" type="button" class="seg-btn" data-mode="advanced" aria-pressed="false">Advanced Mode</button>
       </div>
 
       <label class="toggle-pill" title="Hide or dim well-known baselines (Atacama, Antarctica, Hawaii, Iceland, Haughton, Rio Tinto)">
@@ -32,8 +32,8 @@
         <span>Beyond Well-Known Sites</span>
       </label>
 
-      <button id="btn-toggle-spin" class="action-btn" title="Gently spin the 3D globe when idle">Auto-Spin: ON</button>
-      <button id="btn-toggle-projection" class="action-btn">3D Globe: ON</button>
+      <button id="btn-toggle-spin" type="button" class="action-btn" aria-pressed="true" title="Gently spin the 3D globe when idle">Auto-Spin: ON</button>
+      <button id="btn-toggle-projection" type="button" class="action-btn" aria-pressed="true">3D Globe: ON</button>
     </div>
   </header>
 
@@ -330,9 +330,9 @@
         </button>
         <div class="collapse-body">
           <div class="collapse-inner">
-            <div class="segmented small-seg">
-              <button id="tab-hotspots" class="seg-btn active" type="button">Local Hotspots</button>
-              <button id="tab-h3" class="seg-btn" type="button">Top H3 Regions</button>
+            <div class="segmented small-seg" role="group" aria-label="Ranked Analog Category">
+              <button id="tab-hotspots" class="seg-btn active" type="button" aria-pressed="true">Local Hotspots</button>
+              <button id="tab-h3" class="seg-btn" type="button" aria-pressed="false">Top H3 Regions</button>
             </div>
             <div id="ranked-list" class="ranked-list no-scrollbar"></div>
           </div>

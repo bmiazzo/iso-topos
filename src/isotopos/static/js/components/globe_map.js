@@ -1,64 +1,22 @@
-// 3D Earth Globe (MapLibre GL JS), starfield backdrop, layer coloring & legend
+// 3D Earth Globe (MapLibre GL JS), basemap switching, hit-testing, and layer updates
 
 import { fetchRawParameter } from "../api.js";
 import { PALETTES, state } from "../state.js";
+import { escapeHtml } from "../ui/dom.js";
+import {
+  buildFillColorExpression,
+  buildFillOpacityExpression,
+  buildOutlineOpacityExpression,
+  computeLayerColorRange,
+  updateLegendGradient,
+  updateLegendLabels,
+} from "./color_scale.js";
 
-export function initStarfield() {
-  const canvas = document.getElementById("starfield-canvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-
-  function renderStars() {
-    const rect = canvas.parentElement.getBoundingClientRect();
-    canvas.width = Math.max(300, Math.floor(rect.width));
-    canvas.height = Math.max(300, Math.floor(rect.height));
-    const w = canvas.width;
-    const h = canvas.height;
-
-    ctx.clearRect(0, 0, w, h);
-
-    const grad = ctx.createRadialGradient(w * 0.5, h * 0.5, w * 0.12, w * 0.5, h * 0.5, w * 0.65);
-    grad.addColorStop(0, "rgba(14, 116, 144, 0.16)");
-    grad.addColorStop(0.5, "rgba(30, 58, 138, 0.08)");
-    grad.addColorStop(1, "rgba(2, 6, 23, 0.0)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
-
-    let seed = 1337;
-    const rand = () => {
-      seed = (seed * 16807) % 2147483647;
-      return (seed - 1) / 2147483646;
-    };
-
-    const starCount = 320;
-    for (let i = 0; i < starCount; i++) {
-      const x = rand() * w;
-      const y = rand() * h;
-      const r = rand() < 0.85 ? 0.6 + rand() * 0.7 : 1.3 + rand() * 1.1;
-      const alpha = 0.25 + rand() * 0.7;
-      const tint = rand() < 0.3 ? "186, 230, 253" : rand() < 0.6 ? "254, 243, 199" : "241, 245, 249";
-      ctx.fillStyle = `rgba(${tint}, ${alpha.toFixed(2)})`;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  renderStars();
-  window.addEventListener("resize", renderStars);
-}
-
-export function updateLegendGradient() {
-  const bar = document.getElementById("legend-gradient-bar");
-  if (!bar) return;
-  const stops = PALETTES[state.palette] || PALETTES.bioluminescent;
-  const cssStops = stops.map(([t, col]) => `${col} ${Math.round(t * 100)}%`).join(", ");
-  bar.style.background = `linear-gradient(90deg, ${cssStops})`;
-}
+export { updateLegendGradient };
 
 export function populateLayerSwitcher() {
   const sel = document.getElementById("layer-variable-select");
-  if (!sel) return;
+  if (!sel || !state.metadata) return;
   sel.innerHTML = "";
 
   const overallOpt = document.createElement("option");
@@ -85,6 +43,28 @@ export function populateLayerSwitcher() {
     rawGroup.appendChild(opt);
   }
   sel.appendChild(rawGroup);
+}
+
+function positionTooltipWithinStage(tooltipEl, mapEl, point) {
+  const stageW = mapEl.clientWidth || 800;
+  const stageH = mapEl.clientHeight || 600;
+  const tipW = tooltipEl.offsetWidth || 210;
+  const tipH = tooltipEl.offsetHeight || 64;
+  const left = Math.max(8, Math.min(stageW - tipW - 8, point.x + 14));
+  const top = Math.max(8, Math.min(stageH - tipH - 8, point.y + 14));
+  tooltipEl.style.left = `${left}px`;
+  tooltipEl.style.top = `${top}px`;
+}
+
+export function highlightSelectedSiteOnMap(siteId) {
+  if (!state.map) return;
+  const targetId = siteId || "";
+  if (state.map.getLayer("earth-h3-selected")) {
+    state.map.setFilter("earth-h3-selected", ["==", ["get", "id"], targetId]);
+  }
+  if (state.map.getLayer("earth-hotspots-selected")) {
+    state.map.setFilter("earth-hotspots-selected", ["==", ["get", "id"], targetId]);
+  }
 }
 
 export function initEarthMap({ onInspectSite }) {
@@ -135,21 +115,25 @@ export function initEarthMap({ onInspectSite }) {
 
   map.addControl(new maplibregl.NavigationControl(), "top-right");
 
-  const pauseSpin = () => {
+  const pausePointer = () => {
+    state.pointerDown = true;
     state.userInteracting = true;
   };
-  const resumeSpin = () => {
+  const resumePointer = () => {
+    state.pointerDown = false;
     state.userInteracting = false;
   };
-  map.on("mousedown", pauseSpin);
-  map.on("touchstart", pauseSpin);
+  map.on("mousedown", pausePointer);
+  map.on("touchstart", pausePointer);
   map.on("wheel", () => {
     state.userInteracting = true;
     clearTimeout(map._wheelTimeout);
-    map._wheelTimeout = setTimeout(resumeSpin, 2200);
+    map._wheelTimeout = setTimeout(() => {
+      if (!state.pointerDown) state.userInteracting = false;
+    }, 2200);
   });
-  map.on("mouseup", resumeSpin);
-  map.on("touchend", resumeSpin);
+  map.on("mouseup", resumePointer);
+  map.on("touchend", resumePointer);
 
   map.on("style.load", () => {
     map.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
@@ -225,7 +209,21 @@ export function initEarthMap({ onInspectSite }) {
       },
     });
 
+    map.addLayer({
+      id: "earth-hotspots-selected",
+      type: "circle",
+      source: "earth-hotspots",
+      filter: ["==", ["get", "id"], ""],
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 9.0, 5.0, 12.5],
+        "circle-color": "rgba(56, 189, 248, 0.0)",
+        "circle-stroke-width": 2.4,
+        "circle-stroke-color": "#2dd4bf",
+      },
+    });
+
     const tooltip = document.getElementById("hover-tooltip");
+    const mapContainer = map.getContainer();
 
     map.on("mousemove", (e) => {
       const hits = map.queryRenderedFeatures(e.point, {
@@ -242,10 +240,12 @@ export function initEarthMap({ onInspectSite }) {
         const p = top.properties;
         const kind = p.is_well_known ? "Baseline Hotspot" : "Novel Hotspot";
         map.getCanvas().style.cursor = "pointer";
-        tooltip.innerHTML = `<strong>${p.name}</strong><br/>${kind}<br/>Similarity: <b>${p.score_pct}%</b>`;
-        tooltip.style.left = `${e.point.x + 14}px`;
-        tooltip.style.top = `${e.point.y + 14}px`;
+        tooltip.innerHTML =
+          `<strong>${escapeHtml(p.name)}</strong><br/>` +
+          `${escapeHtml(kind)}<br/>` +
+          `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
         tooltip.classList.remove("hidden");
+        positionTooltipWithinStage(tooltip, mapContainer, e.point);
         return;
       }
 
@@ -265,10 +265,12 @@ export function initEarthMap({ onInspectSite }) {
         const param = state.metadata.parameters.find((pm) => pm.id === state.activeLayer.slice(4));
         unitLabel = param ? ` ${param.unit}` : "";
       }
-      tooltip.innerHTML = `<strong>${props.name}</strong><br/>${props.region}<br/>Value: <b>${Number(val).toFixed(1)}${unitLabel}</b>`;
-      tooltip.style.left = `${e.point.x + 14}px`;
-      tooltip.style.top = `${e.point.y + 14}px`;
+      tooltip.innerHTML =
+        `<strong>${escapeHtml(props.name)}</strong><br/>` +
+        `${escapeHtml(props.region)}<br/>` +
+        `Value: <b>${escapeHtml(Number(val).toFixed(1))}${escapeHtml(unitLabel)}</b>`;
       tooltip.classList.remove("hidden");
+      positionTooltipWithinStage(tooltip, mapContainer, e.point);
     });
 
     map.on("mouseleave", "earth-h3-fill", () => {
@@ -294,6 +296,7 @@ export function initEarthMap({ onInspectSite }) {
     });
 
     state.mapReady = true;
+    highlightSelectedSiteOnMap(state.selectedSiteId);
     updateEarthMapLayers(true);
   });
 
@@ -326,6 +329,7 @@ export function startAutoSpinLoop() {
       state.isGlobe &&
       state.autoSpin &&
       !state.userInteracting &&
+      !state.pointerDown &&
       state.map.getZoom() < 2.8
     ) {
       const center = state.map.getCenter();
@@ -335,13 +339,6 @@ export function startAutoSpinLoop() {
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-}
-
-function formatTick(val, isRaw) {
-  if (isRaw) {
-    return Math.abs(val) >= 100 ? String(Math.round(val)) : val.toFixed(1);
-  }
-  return `${Math.round(val)}%`;
 }
 
 async function ensureRawParameterLoaded(paramId) {
@@ -406,109 +403,43 @@ export async function updateEarthMapLayers(updateData = true) {
   }
 
   const effectiveCutoff = isScoreLayer ? state.minScoreFilter : -99999;
-
-  let dataMin = Infinity;
-  let dataMax = -Infinity;
-  let validCount = 0;
-  for (const feat of state.earthGeojson.features) {
-    const v = state.cellDisplayValues[feat.properties.id] ?? -999999;
-    if (v <= -99999) continue;
-    if (isScoreLayer && v < effectiveCutoff) continue;
-    validCount += 1;
-    if (v < dataMin) dataMin = v;
-    if (v > dataMax) dataMax = v;
-  }
-
-  let minVal = 0;
-  let maxVal = 100;
-  if (!isScoreLayer && paramSpec) {
-    if (state.scaleMode === "auto" && validCount > 0) {
-      minVal = dataMin;
-      maxVal = dataMax;
-    } else {
-      minVal = paramSpec.earth_min;
-      maxVal = paramSpec.earth_max;
-    }
-  } else if (state.scaleMode === "auto" && validCount > 0) {
-    minVal = dataMin;
-    maxVal = dataMax;
-  }
-
-  if (!Number.isFinite(minVal) || !Number.isFinite(maxVal)) {
-    minVal = 0;
-    maxVal = 100;
-  }
-  if (maxVal - minVal < (isScoreLayer ? 2.0 : 1e-3)) {
-    const pad = isScoreLayer ? 1.0 : Math.max(0.05, Math.abs(minVal) * 0.05);
-    minVal = isScoreLayer ? Math.max(0, minVal - pad) : minVal - pad;
-    maxVal = isScoreLayer ? Math.min(100, maxVal + pad) : maxVal + pad;
-  }
+  const { minVal, maxVal, validCount } = computeLayerColorRange({
+    features: state.earthGeojson.features,
+    cellDisplayValues: state.cellDisplayValues,
+    isScoreLayer,
+    effectiveCutoff,
+    scaleMode: state.scaleMode,
+    paramSpec,
+  });
 
   if (layerKey.startsWith("dim:") && validCount === 0 && Object.keys(cell_scores).length > 0) {
     legendTitle = `${legendTitle} — N/A (0% weights)`;
   }
 
-  const minLabel = formatTick(minVal, !isScoreLayer);
-  const maxLabel = formatTick(maxVal, !isScoreLayer);
-  document.getElementById("legend-title").textContent = legendTitle;
-  document.getElementById("legend-min").textContent = minLabel;
-  document.getElementById("legend-mid").textContent = formatTick((minVal + maxVal) / 2, !isScoreLayer);
-  document.getElementById("legend-max").textContent = maxLabel;
-  const legendSummary = document.getElementById("summary-legend");
-  if (legendSummary) legendSummary.textContent = `${minLabel}–${maxLabel}`;
+  updateLegendLabels({ legendTitle, minVal, maxVal, isScoreLayer });
 
   const paletteStops = PALETTES[state.palette] || PALETTES.bioluminescent;
   const valExpr = ["coalesce", ["feature-state", "display_val"], -999999];
 
-  const colorExpr = [
-    "case",
-    ["<", valExpr, effectiveCutoff],
-    "rgba(15, 23, 42, 0.0)",
-    [
-      "interpolate",
-      ["linear"],
-      valExpr,
-      ...paletteStops.flatMap(([t, col]) => [minVal + t * (maxVal - minVal), col]),
-    ],
-  ];
-
-  const span = Math.max(1e-6, maxVal - minVal);
-  const sLow = minVal;
-  const sMid = minVal + 0.45 * span;
-  const sHigh = minVal + 0.78 * span;
-
-  const opacityExpr = isScoreLayer
-    ? [
-        "case",
-        ["<", valExpr, effectiveCutoff],
-        0.0,
-        [
-          "interpolate",
-          ["linear"],
-          valExpr,
-          sLow,
-          Number((state.hexOpacity * 0.44).toFixed(3)),
-          sMid,
-          Number((state.hexOpacity * 0.74).toFixed(3)),
-          sHigh,
-          Number((state.hexOpacity * 0.95).toFixed(3)),
-          maxVal,
-          Number(state.hexOpacity.toFixed(3)),
-        ],
-      ]
-    : [
-        "case",
-        ["<=", valExpr, -99999],
-        0.0,
-        Number((state.hexOpacity * 0.88).toFixed(3)),
-      ];
-
-  const outlineOpacityExpr = [
-    "case",
-    ["<", valExpr, effectiveCutoff],
-    0.0,
-    ["interpolate", ["linear"], ["zoom"], 2.2, 0.0, 3.3, 0.18, 5.2, 0.45],
-  ];
+  const colorExpr = buildFillColorExpression({
+    valExpr,
+    effectiveCutoff,
+    paletteStops,
+    minVal,
+    maxVal,
+  });
+  const opacityExpr = buildFillOpacityExpression({
+    valExpr,
+    isScoreLayer,
+    effectiveCutoff,
+    hexOpacity: state.hexOpacity,
+    minVal,
+    maxVal,
+  });
+  const outlineOpacityExpr = buildOutlineOpacityExpression({
+    valExpr,
+    effectiveCutoff,
+  });
 
   state.map.setPaintProperty("earth-h3-fill", "fill-color", colorExpr);
   state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);

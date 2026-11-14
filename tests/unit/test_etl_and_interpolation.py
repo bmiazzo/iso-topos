@@ -223,13 +223,16 @@ def test_planetary_parameter_synthesis_has_no_rectangular_discontinuities():
 def test_h3_grid_marks_well_known_baseline_vicinity():
     """FR-6: H3 cells overlapping well-known baseline regions are flagged is_well_known=True."""
     import h3
+    from isotopos.api.datastore import get_default_datastore
+    from isotopos.etl.spatial_builder import _is_near_well_known_baseline
 
-    sites, _ = build_earth_h3_grid(max_cells=None, res=4)
-    by_id = {s.id: s for s in sites}
+    by_id = get_default_datastore().h3_prepacked.site_by_id
     atacama_cid = h3.latlng_to_cell(-24.08, -69.92, 4)
+    assert _is_near_well_known_baseline(-24.08, -69.92) is True
     assert by_id[atacama_cid].is_well_known is True
     # Greenland White Mountain is explicitly novel (is_well_known=False)
     greenland_cid = h3.latlng_to_cell(66.52, -52.45, 4)
+    assert _is_near_well_known_baseline(66.52, -52.45) is False
     assert by_id[greenland_cid].is_well_known is False
 
 
@@ -247,5 +250,16 @@ def test_planetary_and_earth_anchor_blending_is_order_independent_and_preserves_
     mcmurdo = next(h for h in EARTH_HOTSPOTS if h.id == "mcmurdo_dry_valleys")
     synth_mcmurdo = _synthesize_earth_cell_parameters(mcmurdo.lat, mcmurdo.lon)
     assert abs(synth_mcmurdo["low_sun_grazing_hours"] - mcmurdo.parameters["low_sun_grazing_hours"]) < 150.0
+
+
+def test_load_land_h3_cells_returns_defensive_copy():
+    """Mutating the set returned by _load_land_h3_cells must not corrupt the cached land mask."""
+    cells_a = _load_land_h3_cells(res=4)
+    initial_len = len(cells_a)
+    cells_a.add("fake_cell_id")
+    cells_b = _load_land_h3_cells(res=4)
+    assert len(cells_b) == initial_len
+    assert "fake_cell_id" not in cells_b
+
 
 

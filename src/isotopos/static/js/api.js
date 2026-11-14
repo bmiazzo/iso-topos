@@ -62,5 +62,15 @@ export async function exportAnalogsBlob(format, payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (!resp.ok) {
+    let detail = `Export failed with HTTP ${resp.status}`;
+    try {
+      const errData = await resp.json();
+      if (errData?.detail) detail = errData.detail;
+    } catch {
+      // Ignore non-JSON error body
+    }
+    throw new Error(detail);
+  }
   return resp.blob();
 }

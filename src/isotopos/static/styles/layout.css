@@ -40,6 +40,7 @@
   display: grid;
   grid-template-columns: var(--left-width) 1fr var(--right-width);
   height: calc(100vh - 52px);
+  height: calc(100dvh - 52px);
   overflow: hidden;
   transition: grid-template-columns 220ms var(--collapse-ease);
 }

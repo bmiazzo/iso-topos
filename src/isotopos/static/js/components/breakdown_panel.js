@@ -1,6 +1,8 @@
 // Right Drawer: Ranked Earth Analogs list, Chart.js dimension chart & nested breakdown
 
 import { state } from "../state.js";
+import { escapeHtml } from "../ui/dom.js";
+import { highlightSelectedSiteOnMap } from "./globe_map.js";
 
 export function resizeDimensionChart() {
   state.chart?.resize();
@@ -24,16 +26,20 @@ export function renderRankedList({ onSelectSite }) {
   }
 
   for (const r of results) {
-    const item = document.createElement("div");
-    item.className = `rank-item ${r.site.id === state.selectedSiteId ? "selected" : ""}`;
+    const isSelected = r.site.id === state.selectedSiteId;
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `rank-item ${isSelected ? "selected" : ""}`;
+    item.setAttribute("aria-pressed", isSelected ? "true" : "false");
     const pct = (r.overall_score * 100).toFixed(1);
-    const tag = r.site.site_type === "hotspot" ? (r.site.is_well_known ? "Baseline" : "Novel") : "H3 Res 4";
+    const tag =
+      r.site.site_type === "hotspot" ? (r.site.is_well_known ? "Baseline" : "Novel") : "H3 Res 4";
     item.innerHTML = `
       <div>
-        <div class="rank-item-name">${r.site.name}</div>
-        <div class="rank-item-sub">${r.site.region} • ${tag}</div>
+        <div class="rank-item-name">${escapeHtml(r.site.name)}</div>
+        <div class="rank-item-sub">${escapeHtml(r.site.region)} • ${escapeHtml(tag)}</div>
       </div>
-      <div class="score-pill">${pct}%</div>
+      <div class="score-pill">${escapeHtml(pct)}%</div>
     `;
     item.addEventListener("click", () => onSelectSite(r));
     listEl.appendChild(item);
@@ -42,15 +48,14 @@ export function renderRankedList({ onSelectSite }) {
 
 export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
   state.selectedSiteId = result.site.id;
-  if (state.map && state.map.getLayer("earth-h3-selected")) {
-    state.map.setFilter("earth-h3-selected", ["==", ["get", "id"], result.site.id]);
-  }
+  highlightSelectedSiteOnMap(result.site.id);
 
   document.getElementById("breakdown-card").classList.remove("hidden");
   document.getElementById("detail-name").textContent = result.site.name;
   document.getElementById("detail-meta").textContent =
     `${result.site.region} (${result.site.lat.toFixed(2)}°, ${result.site.lon.toFixed(2)}°)`;
-  document.getElementById("detail-score-badge").textContent = `${(result.overall_score * 100).toFixed(1)}%`;
+  document.getElementById("detail-score-badge").textContent =
+    `${(result.overall_score * 100).toFixed(1)}%`;
   document.getElementById("detail-notes").textContent = result.site.notes || "";
 
   const labels = result.dimension_breakdowns.map((d) =>
@@ -109,7 +114,11 @@ export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
   for (const c of result.earth_limit_caveats) {
     const div = document.createElement("div");
     div.className = "caveat-card";
-    div.innerHTML = `<strong>${c.title}</strong><span>${c.explanation}</span>`;
+    const strong = document.createElement("strong");
+    strong.textContent = c.title;
+    const span = document.createElement("span");
+    span.textContent = c.explanation;
+    div.append(strong, span);
     cavEl.appendChild(div);
   }
   collapseCtrl?.setSummary(
@@ -125,14 +134,15 @@ export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
     const pSpec = state.metadata.parameters.find((p) => p.id === comp.parameter_id);
     const pProv = state.body === "moon" ? pSpec.moon_provenance : pSpec.mars_provenance;
     const tr = document.createElement("tr");
+    const simText = comp.weight === 0 ? "N/A" : `${Math.round(comp.similarity * 100)}%`;
     tr.innerHTML = `
-      <td>${comp.label}<br/><small>${comp.unit}</small></td>
-      <td>${comp.earth_value}</td>
-      <td>${comp.target_value}</td>
-      <td>${comp.weight === 0 ? "N/A" : Math.round(comp.similarity * 100) + "%"}</td>
+      <td>${escapeHtml(comp.label)}<br/><small>${escapeHtml(comp.unit)}</small></td>
+      <td>${escapeHtml(comp.earth_value)}</td>
+      <td>${escapeHtml(comp.target_value)}</td>
+      <td>${escapeHtml(simText)}</td>
       <td>
-        <a href="${pSpec.earth_provenance.url}" target="_blank" rel="noopener">${pSpec.earth_provenance.agency_mission}</a> /
-        <a href="${pProv.url}" target="_blank" rel="noopener">${pProv.agency_mission}</a>
+        <a href="${escapeHtml(pSpec.earth_provenance.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(pSpec.earth_provenance.agency_mission)}</a> /
+        <a href="${escapeHtml(pProv.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(pProv.agency_mission)}</a>
       </td>
     `;
     tbody.appendChild(tr);

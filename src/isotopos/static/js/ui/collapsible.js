@@ -60,10 +60,12 @@ export function createCollapsibleSection({
   wrapper.dataset.collapseId = id;
   wrapper.dataset.collapseDefault = defaultOpen ? "open" : "closed";
 
+  const bodyId = `collapse-body-${id}`;
   const trigger = document.createElement("button");
   trigger.type = "button";
   trigger.className = "collapse-trigger";
   trigger.setAttribute("aria-expanded", defaultOpen ? "true" : "false");
+  trigger.setAttribute("aria-controls", bodyId);
 
   const titleWrap = document.createElement("span");
   titleWrap.className = "collapse-title-wrap";
@@ -84,6 +86,7 @@ export function createCollapsibleSection({
   trigger.append(titleWrap, pill);
 
   const body = document.createElement("div");
+  body.id = bodyId;
   body.className = "collapse-body";
   const inner = document.createElement("div");
   inner.className = "collapse-inner";
@@ -119,7 +122,9 @@ export class MenuCollapseController {
 
   setOpen(menuEl, open, { persist = true } = {}) {
     const id = menuEl.dataset.collapseId;
-    const trigger = menuEl.querySelector(":scope > .collapse-trigger, :scope > .collapse-header-row > .collapse-trigger");
+    const trigger = menuEl.querySelector(
+      ":scope > .collapse-trigger, :scope > .collapse-header-row > .collapse-trigger"
+    );
     menuEl.classList.toggle("is-collapsed", !open);
     if (trigger) trigger.setAttribute("aria-expanded", open ? "true" : "false");
 
@@ -149,6 +154,12 @@ export class MenuCollapseController {
       );
       if (!trigger) continue;
 
+      const body = menuEl.querySelector(":scope > .collapse-body");
+      if (body && id) {
+        if (!body.id) body.id = `collapse-body-${id}`;
+        trigger.setAttribute("aria-controls", body.id);
+      }
+
       // Ensure static HTML chevrons match the vector SVG used by dynamic sections
       const existingChevron = trigger.querySelector(".chevron");
       if (existingChevron && !existingChevron.querySelector("svg")) {
@@ -166,7 +177,9 @@ export class MenuCollapseController {
     let pill = document.getElementById(pillOrCollapseId);
     if (!pill) {
       const menuEl = document.querySelector(`[data-collapse-id="${CSS.escape(pillOrCollapseId)}"]`);
-      pill = menuEl?.querySelector(":scope > .collapse-trigger > .summary-pill, :scope > .collapse-header-row > .collapse-trigger > .summary-pill");
+      pill = menuEl?.querySelector(
+        ":scope > .collapse-trigger > .summary-pill, :scope > .collapse-header-row > .collapse-trigger > .summary-pill"
+      );
     }
     if (!pill) return;
     pill.textContent = text;

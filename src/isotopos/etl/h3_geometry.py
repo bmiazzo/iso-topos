@@ -10,7 +10,7 @@ import h3
 
 from isotopos.etl.catalog_data import EARTH_HOTSPOTS
 
-_LAND_CELL_CACHE: dict[int, set[str]] = {}
+_LAND_CELL_CACHE: dict[int, frozenset[str]] = {}
 
 # Key volcanic, polar, and oceanic analog islands guaranteed in the land mask
 ANALOG_ISLANDS_LATLON: tuple[tuple[float, float], ...] = (
@@ -36,16 +36,16 @@ ANALOG_ISLANDS_LATLON: tuple[tuple[float, float], ...] = (
 def load_land_h3_cells(res: int = 4) -> set[str]:
     """Extract H3 land cells from Natural Earth 50m Land polygons + curated islands/hotspots."""
     if res in _LAND_CELL_CACHE:
-        return _LAND_CELL_CACHE[res]
+        return set(_LAND_CELL_CACHE[res])
 
     root = Path(__file__).resolve().parents[3]
     ne_path = root / "data" / "raw" / "ne_50m_land.geojson"
     cache_path = root / "data" / "raw" / f"ne_50m_h3_res{res}_cells.json"
 
     if cache_path.exists():
-        cells = set(json.loads(cache_path.read_text(encoding="utf-8")))
+        cells = frozenset(json.loads(cache_path.read_text(encoding="utf-8")))
         _LAND_CELL_CACHE[res] = cells
-        return cells
+        return set(cells)
 
     cells: set[str] = set()
     if ne_path.exists():
@@ -86,8 +86,8 @@ def load_land_h3_cells(res: int = 4) -> set[str]:
             encoding="utf-8",
         )
 
-    _LAND_CELL_CACHE[res] = cells
-    return cells
+    _LAND_CELL_CACHE[res] = frozenset(cells)
+    return set(cells)
 
 
 def clip_antimeridian_halfplane(

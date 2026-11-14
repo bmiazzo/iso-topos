@@ -17,6 +17,8 @@ export function updateAllMenuSummaries(collapseCtrl, activeFilterCount = 0) {
   if (state.activePresetId) {
     const preset = state.metadata.presets.find((p) => p.id === state.activePresetId);
     collapseCtrl.setSummary("summary-target", preset ? preset.name : "Preset", "accent");
+  } else if (state.targetCustomized) {
+    collapseCtrl.setSummary("summary-target", "Custom Override", "warn");
   } else if (state.target) {
     collapseCtrl.setSummary("summary-target", "Custom Coord", "warn");
   } else {
@@ -25,12 +27,13 @@ export function updateAllMenuSummaries(collapseCtrl, activeFilterCount = 0) {
 
   if (state.target) {
     const coord = `${state.target.lat.toFixed(1)}°, ${state.target.lon.toFixed(1)}°`;
-    const tag = state.target.is_extrapolated ? "Extrap." : "Exact";
-    collapseCtrl.setSummary(
-      "summary-picker",
-      `${coord} • ${tag}`,
-      state.target.is_extrapolated ? "warn" : "neutral"
-    );
+    const tag = state.target.is_extrapolated
+      ? "Extrap."
+      : state.targetCustomized
+      ? "Override"
+      : "Exact";
+    const isWarn = state.target.is_extrapolated || state.targetCustomized;
+    collapseCtrl.setSummary("summary-picker", `${coord} • ${tag}`, isWarn ? "warn" : "neutral");
   }
 
   // AI Evaluator

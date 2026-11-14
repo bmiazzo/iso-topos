@@ -110,3 +110,42 @@ def test_disabled_parameters_do_not_trigger_envelope_exceeded_caveat():
     caveat_categories = {c.category for c in res.earth_limit_caveats}
     assert "envelope_exceeded" not in caveat_categories
 
+
+def test_explainer_supports_custom_relevance_rules_and_fallback():
+    """OCP: DivergenceExplainer accepts custom ExplorationRelevanceRule strategies and falls back cleanly."""
+    from isotopos.scoring.explainer import DivergenceExplainer, ExplorationRelevanceRule
+
+    benign_params = {p.id: 0.1 for p in DEFAULT_REGISTRY.parameters}
+    benign_params["low_sun_grazing_hours"] = 200.0
+    benign_params["slope_deg"] = 2.0
+    site = EarthSite(
+        id="flat_plain",
+        name="Flat Plain",
+        region="Earth",
+        site_type="hotspot",
+        lat=10.0,
+        lon=10.0,
+        parameters=benign_params,
+    )
+    target = TargetLocation(
+        name="Moon Target",
+        body=PlanetaryBody.MOON,
+        lat=0.0,
+        lon=0.0,
+        parameters=benign_params,
+    )
+
+    default_explainer = DivergenceExplainer(DEFAULT_REGISTRY)
+    fallback_rel = default_explainer.build_exploration_relevance(site, target)
+    assert fallback_rel == ["General Terrain Traversability & Multi-Sensor Instrument Field Calibration"]
+
+    custom_rule = ExplorationRelevanceRule(
+        parameter_id="slope_deg",
+        min_threshold=1.0,
+        label="Custom Ultra-Flat Lander Touchdown Stability Trial",
+    )
+    custom_explainer = DivergenceExplainer(DEFAULT_REGISTRY, relevance_rules=(custom_rule,))
+    custom_rel = custom_explainer.build_exploration_relevance(site, target)
+    assert custom_rel == ["Custom Ultra-Flat Lander Touchdown Stability Trial"]
+
+

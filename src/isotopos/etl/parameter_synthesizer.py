@@ -1,7 +1,8 @@
-"""Earth and planetary 17-parameter spatial synthesis models (DEC-006)."""
+"""Earth and planetary 17-parameter spatial synthesis models (DEC-006, ER-4)."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import math
 
 from isotopos.core.models import PlanetaryBody
@@ -59,6 +60,16 @@ BASALT_PROVINCES: tuple[tuple[float, float, float, float, float], ...] = (
     (25.6, 40.0, 3.5, 3.0, 0.84),     # Harrat Khaybar / Arabian volcanic fields
     (37.8, 15.0, 1.8, 2.0, 0.84),     # Etna / Sicily
     (28.6, -15.5, 2.0, 2.5, 0.88),    # Canary Islands
+)
+
+_LUNAR_MARE_LOBES: tuple[tuple[float, float, float, float, float], ...] = (
+    (18.0, 338.0, 22.0, 26.0, 0.94),   # Oceanus Procellarum / Imbrium
+    (10.0, 30.0, 18.0, 24.0, 0.90),    # Mare Serenitatis / Tranquillitatis
+    (-16.0, 342.0, 14.0, 18.0, 0.75),  # Mare Nubium / Humorum
+)
+
+_MARS_THARSIS_LOBES: tuple[tuple[float, float, float, float, float], ...] = (
+    (3.0, 246.0, 16.0, 18.0, 0.96),
 )
 
 _WELL_KNOWN_HOTSPOTS = tuple(hs for hs in EARTH_HOTSPOTS if hs.is_well_known)
@@ -196,87 +207,100 @@ def synthesize_earth_cell_parameters(lat: float, lon: float) -> dict[str, float]
     return {k: round(v, _EARTH_ROUND_DIGITS[k]) for k, v in blended.items()}
 
 
+def _synthesize_moon_base(lat: float, lon_360: float, grazing: float) -> dict[str, float]:
+    """Synthesize base Lunar surface parameters before preset anchor blending."""
+    abs_lat = abs(lat)
+    mare_w = soft_province_field(lat, lon_360, _LUNAR_MARE_LOBES)
+    anorthosite = 0.92 * (1.0 - mare_w) + 0.25 * mare_w
+    basalt = 0.08 * (1.0 - mare_w) + 0.88 * mare_w
+    highland_elev = 1600.0 + 1800.0 * math.sin(math.radians(abs_lat))
+    elevation_m = highland_elev * (1.0 - mare_w) + (-1400.0) * mare_w
+    slope_deg = 3.0 + 12.0 * (1.0 - mare_w) + 1.5 * mare_w
+    mean_temp_c = -18.0 - 1.35 * abs_lat
+    diurnal = 250.0 * math.cos(math.radians(abs_lat * 0.85))
+    ice = 0.02 + 0.86 * sigmoid((abs_lat - 79.0) / 3.2)
+    cold_trap = min(0.95, ice * 1.05)
+    dlat_rg, dlon_rg, _ = geodesic_deg(lat, lon_360, 7.5, 301.0)
+    reiner_gamma = 550.0 * math.exp(-0.5 * ((dlat_rg / 4.0) ** 2 + (dlon_rg / 5.0) ** 2))
+    mag_nt = 20.0 + reiner_gamma + 35.0 * abs(math.sin(math.radians(lon_360 * 3.0)))
+    illum = 0.50 + 0.32 * sigmoid((abs_lat - 82.0) / 2.2)
+    return {
+        "elevation_m": elevation_m,
+        "slope_deg": slope_deg,
+        "roughness_index": 0.35 + 0.4 * (1.0 - mare_w),
+        "anorthosite_highland_score": anorthosite,
+        "basalt_volcanic_score": basalt,
+        "clay_carbonate_sediment_score": 0.0,
+        "regolith_rock_abundance": 0.92,
+        "magnetic_anomaly_nt": mag_nt,
+        "mean_temp_c": mean_temp_c,
+        "diurnal_amplitude_c": max(45.0, diurnal),
+        "solar_illumination_frac": illum,
+        "low_sun_grazing_hours": grazing,
+        "aridity_dryness_index": 1.0,
+        "subsurface_ice_permafrost": ice,
+        "cold_trap_sublimation_index": cold_trap,
+        "subsurface_cave_drilling_score": 0.45,
+        "biosignature_preservation_score": 0.0,
+    }
+
+
+def _synthesize_mars_base(lat: float, lon_360: float, grazing: float) -> dict[str, float]:
+    """Synthesize base Martian surface parameters before preset anchor blending."""
+    abs_lat = abs(lat)
+    north_lowland_w = sigmoid((lat - 22.0) / 7.5)
+    tharsis_w = soft_province_field(lat, lon_360, _MARS_THARSIS_LOBES)
+    elevation_m = (
+        (1200.0 * (1.0 - north_lowland_w) + (-3600.0) * north_lowland_w) * (1.0 - tharsis_w)
+        + 6500.0 * tharsis_w
+    )
+    slope_deg = (7.5 * (1.0 - north_lowland_w) + 2.0 * north_lowland_w) * (1.0 - tharsis_w) + 6.5 * tharsis_w
+    basalt = 0.68 + 0.17 * max(north_lowland_w, tharsis_w)
+    equatorial_clay_w = math.exp(-0.5 * ((lat - 3.0) / 22.0) ** 2) * (1.0 - tharsis_w)
+    clay_carb = 0.32 + 0.42 * equatorial_clay_w
+    mean_temp_c = -48.0 - 0.55 * abs_lat - 0.0015 * max(0.0, elevation_m)
+    diurnal = 80.0 - 0.35 * abs_lat
+    ice = 0.06 + 0.89 * sigmoid((abs_lat - 44.0) / 7.0)
+    cold_trap = min(0.92, ice * 0.95)
+    mag_nt = 55.0 + 225.0 * sigmoid((-10.0 - lat) / 9.0)
+    return {
+        "elevation_m": elevation_m,
+        "slope_deg": slope_deg,
+        "roughness_index": 0.55 * (1.0 - north_lowland_w) + 0.32 * north_lowland_w,
+        "anorthosite_highland_score": 0.14,
+        "basalt_volcanic_score": basalt,
+        "clay_carbonate_sediment_score": clay_carb,
+        "regolith_rock_abundance": 0.92,
+        "magnetic_anomaly_nt": mag_nt,
+        "mean_temp_c": mean_temp_c,
+        "diurnal_amplitude_c": diurnal,
+        "solar_illumination_frac": 0.49,
+        "low_sun_grazing_hours": grazing,
+        "aridity_dryness_index": 0.99,
+        "subsurface_ice_permafrost": ice,
+        "cold_trap_sublimation_index": cold_trap,
+        "subsurface_cave_drilling_score": 0.55 + 0.30 * tharsis_w,
+        "biosignature_preservation_score": 0.75 * clay_carb,
+    }
+
+
+_PLANETARY_OBLIQUITY_DEG: dict[PlanetaryBody, float] = {
+    PlanetaryBody.MOON: 1.54,
+    PlanetaryBody.MARS: 25.19,
+}
+
+_PLANETARY_SYNTHESIZERS: dict[PlanetaryBody, Callable[[float, float, float], dict[str, float]]] = {
+    PlanetaryBody.MOON: _synthesize_moon_base,
+    PlanetaryBody.MARS: _synthesize_mars_base,
+}
+
+
 def synthesize_planetary_point(body: PlanetaryBody, lat: float, lon: float) -> dict[str, float]:
     """Generate smooth, physically grounded Moon or Mars surface parameters at (lat, lon)."""
-    abs_lat = abs(lat)
     lon_360 = lon % 360.0
-    obliquity = 1.54 if body == PlanetaryBody.MOON else 25.19
+    obliquity = _PLANETARY_OBLIQUITY_DEG[body]
     grazing = compute_grazing_sun_hours(lat, obliquity_deg=obliquity)
-
-    if body == PlanetaryBody.MOON:
-        mare_lobes = (
-            (18.0, 338.0, 22.0, 26.0, 0.94),   # Oceanus Procellarum / Imbrium
-            (10.0, 30.0, 18.0, 24.0, 0.90),    # Mare Serenitatis / Tranquillitatis
-            (-16.0, 342.0, 14.0, 18.0, 0.75),  # Mare Nubium / Humorum
-        )
-        mare_w = soft_province_field(lat, lon_360, mare_lobes)
-        anorthosite = 0.92 * (1.0 - mare_w) + 0.25 * mare_w
-        basalt = 0.08 * (1.0 - mare_w) + 0.88 * mare_w
-        highland_elev = 1600.0 + 1800.0 * math.sin(math.radians(abs_lat))
-        elevation_m = highland_elev * (1.0 - mare_w) + (-1400.0) * mare_w
-        slope_deg = 3.0 + 12.0 * (1.0 - mare_w) + 1.5 * mare_w
-        mean_temp_c = -18.0 - 1.35 * abs_lat
-        diurnal = 250.0 * math.cos(math.radians(abs_lat * 0.85))
-        ice = 0.02 + 0.86 * sigmoid((abs_lat - 79.0) / 3.2)
-        cold_trap = min(0.95, ice * 1.05)
-        dlat_rg, dlon_rg, _ = geodesic_deg(lat, lon_360, 7.5, 301.0)
-        reiner_gamma = 550.0 * math.exp(-0.5 * ((dlat_rg / 4.0) ** 2 + (dlon_rg / 5.0) ** 2))
-        mag_nt = 20.0 + reiner_gamma + 35.0 * abs(math.sin(math.radians(lon_360 * 3.0)))
-        illum = 0.50 + 0.32 * sigmoid((abs_lat - 82.0) / 2.2)
-        base_params = {
-            "elevation_m": elevation_m,
-            "slope_deg": slope_deg,
-            "roughness_index": 0.35 + 0.4 * (1.0 - mare_w),
-            "anorthosite_highland_score": anorthosite,
-            "basalt_volcanic_score": basalt,
-            "clay_carbonate_sediment_score": 0.0,
-            "regolith_rock_abundance": 0.92,
-            "magnetic_anomaly_nt": mag_nt,
-            "mean_temp_c": mean_temp_c,
-            "diurnal_amplitude_c": max(45.0, diurnal),
-            "solar_illumination_frac": illum,
-            "low_sun_grazing_hours": grazing,
-            "aridity_dryness_index": 1.0,
-            "subsurface_ice_permafrost": ice,
-            "cold_trap_sublimation_index": cold_trap,
-            "subsurface_cave_drilling_score": 0.45,
-            "biosignature_preservation_score": 0.0,
-        }
-    else:
-        north_lowland_w = sigmoid((lat - 22.0) / 7.5)
-        tharsis_w = soft_province_field(lat, lon_360, ((3.0, 246.0, 16.0, 18.0, 0.96),))
-        elevation_m = (
-            (1200.0 * (1.0 - north_lowland_w) + (-3600.0) * north_lowland_w) * (1.0 - tharsis_w)
-            + 6500.0 * tharsis_w
-        )
-        slope_deg = (7.5 * (1.0 - north_lowland_w) + 2.0 * north_lowland_w) * (1.0 - tharsis_w) + 6.5 * tharsis_w
-        basalt = 0.68 + 0.17 * max(north_lowland_w, tharsis_w)
-        equatorial_clay_w = math.exp(-0.5 * ((lat - 3.0) / 22.0) ** 2) * (1.0 - tharsis_w)
-        clay_carb = 0.32 + 0.42 * equatorial_clay_w
-        mean_temp_c = -48.0 - 0.55 * abs_lat - 0.0015 * max(0.0, elevation_m)
-        diurnal = 80.0 - 0.35 * abs_lat
-        ice = 0.06 + 0.89 * sigmoid((abs_lat - 44.0) / 7.0)
-        cold_trap = min(0.92, ice * 0.95)
-        mag_nt = 55.0 + 225.0 * sigmoid((-10.0 - lat) / 9.0)
-        base_params = {
-            "elevation_m": elevation_m,
-            "slope_deg": slope_deg,
-            "roughness_index": 0.55 * (1.0 - north_lowland_w) + 0.32 * north_lowland_w,
-            "anorthosite_highland_score": 0.14,
-            "basalt_volcanic_score": basalt,
-            "clay_carbonate_sediment_score": clay_carb,
-            "regolith_rock_abundance": 0.92,
-            "magnetic_anomaly_nt": mag_nt,
-            "mean_temp_c": mean_temp_c,
-            "diurnal_amplitude_c": diurnal,
-            "solar_illumination_frac": 0.49,
-            "low_sun_grazing_hours": grazing,
-            "aridity_dryness_index": 0.99,
-            "subsurface_ice_permafrost": ice,
-            "cold_trap_sublimation_index": cold_trap,
-            "subsurface_cave_drilling_score": 0.55 + 0.30 * tharsis_w,
-            "biosignature_preservation_score": 0.75 * clay_carb,
-        }
+    base_params = _PLANETARY_SYNTHESIZERS[body](lat, lon_360, grazing)
 
     blended = blend_with_anchors(
         lat=lat,

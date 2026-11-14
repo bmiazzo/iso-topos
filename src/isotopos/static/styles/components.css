@@ -318,6 +318,7 @@
 }
 
 .rank-item {
+  width: 100%;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -325,6 +326,9 @@
   border-radius: 6px;
   background: var(--bg);
   border: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -332,6 +336,22 @@
 .rank-item.selected {
   border-color: var(--accent);
   background: rgba(56, 189, 248, 0.1);
+}
+
+.rank-item:focus-visible,
+.collapse-trigger:focus-visible,
+.seg-btn:focus-visible,
+.action-btn:focus-visible,
+.small-btn:focus-visible,
+.sidebar-collapse-btn:focus-visible,
+.floating-expand-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.input-invalid {
+  border-color: var(--danger) !important;
+  background: rgba(248, 113, 113, 0.1) !important;
 }
 
 .rank-item-name {

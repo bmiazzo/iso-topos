@@ -20,20 +20,23 @@ import {
 } from "./js/components/breakdown_panel.js";
 import {
   applyBasemap,
+  highlightSelectedSiteOnMap,
   initEarthMap,
-  initStarfield,
   populateLayerSwitcher,
   resizeEarthMap,
   startAutoSpinLoop,
   updateEarthMapLayers,
   updateLegendGradient,
 } from "./js/components/globe_map.js";
+import { initStarfield } from "./js/components/starfield.js";
 import {
-  bindPlanetaryPickerEvents,
-  drawPlanetaryPicker,
-} from "./js/components/planetary_picker.js";
+  bindTargetPanelEvents,
+  populatePresetDropdown,
+  syncControlsFromTarget,
+} from "./js/components/target_panel.js";
 import { state } from "./js/state.js";
 import { MenuCollapseController, SidebarController } from "./js/ui/collapsible.js";
+import { setButtonPressed } from "./js/ui/dom.js";
 import { updateAllMenuSummaries } from "./js/ui/menu_summaries.js";
 
 const collapseCtrl = new MenuCollapseController();
@@ -53,54 +56,6 @@ function syncMenuSummaries() {
   updateAllMenuSummaries(collapseCtrl, buildActiveFilters().length);
 }
 
-function populatePresetDropdown() {
-  const sel = document.getElementById("preset-select");
-  if (!sel) return;
-  sel.innerHTML = "";
-  const bodyPresets = state.metadata.presets.filter((p) => p.body === state.body);
-  for (const p of bodyPresets) {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = `${p.name} (${p.lat.toFixed(1)}°, ${p.lon.toFixed(1)}°E)`;
-    sel.appendChild(opt);
-  }
-  const customOpt = document.createElement("option");
-  customOpt.value = "__custom__";
-  customOpt.textContent = "— Custom Planetary Coordinate —";
-  customOpt.disabled = true;
-  sel.appendChild(customOpt);
-}
-
-function syncControlsFromTarget() {
-  if (!state.target) return;
-  document.getElementById("input-lat").value = state.target.lat.toFixed(2);
-  document.getElementById("input-lon").value = state.target.lon.toFixed(2);
-
-  const badge = document.getElementById("extrapolation-badge");
-  if (state.target.is_extrapolated) {
-    badge.textContent = "Extrapolated Target";
-    badge.className = "badge badge-warn";
-  } else {
-    badge.textContent = "Preset Exact";
-    badge.className = "badge badge-neutral";
-  }
-
-  for (const p of state.metadata.parameters) {
-    const valInput = document.getElementById(`val-${p.id}`);
-    const wtSlider = document.getElementById(`wt-${p.id}`);
-    const wtLabel = document.getElementById(`wt-lbl-${p.id}`);
-    const chkEnable = document.getElementById(`chk-en-${p.id}`);
-    if (valInput) valInput.value = state.target.parameters[p.id];
-    const wPct = Math.round((state.weights[p.id] ?? p.default_weight) * 100);
-    if (wtSlider) wtSlider.value = String(wPct);
-    if (wtLabel) wtLabel.textContent = `${wPct}%`;
-    if (chkEnable) chkEnable.checked = wPct > 0;
-  }
-
-  drawPlanetaryPicker();
-  syncMenuSummaries();
-}
-
 function scheduleRank() {
   clearTimeout(state.rankDebounce);
   state.rankDebounce = setTimeout(runRank, 110);
@@ -108,10 +63,11 @@ function scheduleRank() {
 
 function handleSelectRankedSite(result) {
   state.userInteracting = true;
+  clearTimeout(state.flyToTimer);
   showBreakdown(result, { collapseCtrl, onSelectSite: handleSelectRankedSite });
   state.map?.flyTo({ center: [result.site.lon, result.site.lat], zoom: 4.5 });
-  setTimeout(() => {
-    state.userInteracting = false;
+  state.flyToTimer = setTimeout(() => {
+    if (!state.pointerDown) state.userInteracting = false;
   }, 2500);
 }
 
@@ -138,6 +94,7 @@ async function inspectAnySiteById(siteId) {
 
 async function runRank() {
   if (!state.target) return;
+  const seq = ++state.rankSeq;
   const t0 = performance.now();
   const activeDimId = state.activeLayer.startsWith("dim:") ? state.activeLayer.slice(4) : null;
 
@@ -150,10 +107,12 @@ async function runRank() {
     top_k: 15,
     dimension_id: activeDimId,
   });
+  if (seq !== state.rankSeq) return;
   state.lastRankResponse = data;
 
   const dt = Math.round(performance.now() - t0);
-  document.getElementById("eval-timing").textContent = `${data.filtered_h3_count.toLocaleString()} cells • ${dt} ms`;
+  document.getElementById("eval-timing").textContent =
+    `${data.filtered_h3_count.toLocaleString()} cells • ${dt} ms`;
   document.getElementById("all-zero-warning").classList.toggle("hidden", !data.all_weights_zero);
 
   await updateEarthMapLayers(true);
@@ -172,6 +131,7 @@ async function runRank() {
     showBreakdown(defaultPool[0], { collapseCtrl, onSelectSite: handleSelectRankedSite });
   } else {
     state.selectedSiteId = null;
+    highlightSelectedSiteOnMap("");
     document.getElementById("breakdown-card").classList.add("hidden");
   }
 }
@@ -181,11 +141,12 @@ async function selectPreset(presetId) {
   const target = await extractTarget({ preset_id: presetId });
   state.target = target;
   state.activePresetId = presetId;
+  state.targetCustomized = false;
   state.weights = { ...(target.recommended_weights || {}) };
   document.getElementById("preset-select").value = presetId;
   document.getElementById("preset-context").textContent =
     `${target.mission_context || ""} — ${target.notes || ""}`;
-  syncControlsFromTarget();
+  syncControlsFromTarget({ onSyncSummaries: syncMenuSummaries });
   await runRank();
 }
 
@@ -193,44 +154,30 @@ async function extractCoordinate(lat, lon) {
   const target = await extractTarget({ body: state.body, lat, lon });
   state.target = target;
   state.activePresetId = null;
+  state.targetCustomized = false;
   document.getElementById("preset-select").value = "__custom__";
   document.getElementById("preset-context").textContent = target.notes || "";
-  syncControlsFromTarget();
+  syncControlsFromTarget({ onSyncSummaries: syncMenuSummaries });
   await runRank();
 }
 
 function bindUIEvents() {
-  document.getElementById("btn-body-moon").addEventListener("click", async () => {
-    state.body = "moon";
-    document.getElementById("btn-body-moon").classList.add("active");
-    document.getElementById("btn-body-mars").classList.remove("active");
-    populatePresetDropdown();
-    const first = state.metadata.presets.find((p) => p.body === "moon");
-    if (first) await selectPreset(first.id);
-  });
+  const simpleBtn = document.getElementById("btn-mode-simple");
+  const advancedBtn = document.getElementById("btn-mode-advanced");
 
-  document.getElementById("btn-body-mars").addEventListener("click", async () => {
-    state.body = "mars";
-    document.getElementById("btn-body-mars").classList.add("active");
-    document.getElementById("btn-body-moon").classList.remove("active");
-    populatePresetDropdown();
-    const first = state.metadata.presets.find((p) => p.body === "mars");
-    if (first) await selectPreset(first.id);
-  });
-
-  document.getElementById("btn-mode-simple").addEventListener("click", () => {
+  simpleBtn?.addEventListener("click", () => {
     state.mode = "simple";
-    document.getElementById("btn-mode-simple").classList.add("active");
-    document.getElementById("btn-mode-advanced").classList.remove("active");
+    setButtonPressed(simpleBtn, true);
+    setButtonPressed(advancedBtn, false);
     document.getElementById("advanced-controls").classList.add("hidden");
   });
 
-  document.getElementById("btn-mode-advanced").addEventListener("click", () => {
+  advancedBtn?.addEventListener("click", () => {
     state.mode = "advanced";
-    document.getElementById("btn-mode-advanced").classList.add("active");
-    document.getElementById("btn-mode-simple").classList.remove("active");
+    setButtonPressed(advancedBtn, true);
+    setButtonPressed(simpleBtn, false);
     document.getElementById("advanced-controls").classList.remove("hidden");
-    syncControlsFromTarget();
+    syncControlsFromTarget({ onSyncSummaries: syncMenuSummaries });
   });
 
   document.getElementById("chk-novel-only").addEventListener("change", (e) => {
@@ -241,19 +188,17 @@ function bindUIEvents() {
   document.getElementById("btn-toggle-spin").addEventListener("click", (e) => {
     state.autoSpin = !state.autoSpin;
     e.target.textContent = state.autoSpin ? "Auto-Spin: ON" : "Auto-Spin: OFF";
+    e.target.setAttribute("aria-pressed", state.autoSpin ? "true" : "false");
   });
 
   document.getElementById("btn-toggle-projection").addEventListener("click", (e) => {
     state.isGlobe = !state.isGlobe;
     state.map?.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
     e.target.textContent = state.isGlobe ? "3D Globe: ON" : "2D Map: ON";
+    e.target.setAttribute("aria-pressed", state.isGlobe ? "true" : "false");
   });
 
-  document.getElementById("preset-select").addEventListener("change", (e) => {
-    selectPreset(e.target.value);
-  });
-
-  bindPlanetaryPickerEvents({
+  bindTargetPanelEvents({
     onSelectPreset: selectPreset,
     onExtractCoordinate: extractCoordinate,
   });
@@ -307,24 +252,27 @@ function bindUIEvents() {
     updateEarthMapLayers(false);
   });
 
-  document.getElementById("tab-hotspots").addEventListener("click", () => {
+  const tabHotspots = document.getElementById("tab-hotspots");
+  const tabH3 = document.getElementById("tab-h3");
+
+  tabHotspots?.addEventListener("click", () => {
     state.activeTab = "hotspots";
-    document.getElementById("tab-hotspots").classList.add("active");
-    document.getElementById("tab-h3").classList.remove("active");
+    setButtonPressed(tabHotspots, true);
+    setButtonPressed(tabH3, false);
     renderRankedList({ onSelectSite: handleSelectRankedSite });
   });
 
-  document.getElementById("tab-h3").addEventListener("click", () => {
+  tabH3?.addEventListener("click", () => {
     state.activeTab = "h3";
-    document.getElementById("tab-h3").classList.add("active");
-    document.getElementById("tab-hotspots").classList.remove("active");
+    setButtonPressed(tabH3, true);
+    setButtonPressed(tabHotspots, false);
     renderRankedList({ onSelectSite: handleSelectRankedSite });
   });
 
   document.getElementById("btn-evaluate-weights")?.addEventListener("click", () => {
     evaluateMissionWeights({
       onWeightsApplied: async () => {
-        syncControlsFromTarget();
+        syncControlsFromTarget({ onSyncSummaries: syncMenuSummaries });
         await runRank();
       },
       onSyncSummaries: syncMenuSummaries,

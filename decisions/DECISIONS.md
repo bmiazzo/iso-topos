@@ -128,5 +128,17 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Consequences:** All sidebars (0px collapsed width with floating reopen pills), Level-1 cards, Level-2 nested sub-menus, Level-3 dynamic dimension groups, and floating globe overlays share one uniform collapsible contract; MapLibre `resize()` and Chart.js `resize()` hook cleanly into sidebar and panel transitions.
 - **Related:** `REQUIREMENTS.md` (`FR-13`, `FR-14`, `FR-15`, `NFR-3`, `ER-4`), `DEC-001`, `src/isotopos/static/js/ui/collapsible.js`
 
+## DEC-010: SOLID API/Scoring/Frontend Sub-Module Decomposition & Singleton DataStore Caching
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** A SOLID and web-guidance audit identified mixed responsibilities in `api/app.py` (mixing DTO schemas, disk I/O, CSV/JSON serialization, and HTTP routing), `scoring/explainer.py` (hardcoded `if` chains for exploration relevance and body caveats), `etl/parameter_synthesizer.py` (branching Moon/Mars synthesis in one function), and `static/js/components/globe_map.js` (537 lines mixing starfield rendering, color scale expression math, and MapLibre lifecycle). In addition, instantiating `DataStore` freshly on every `create_app()` call caused the test suite to reload ~50 MB of JSON nine times.
+- **Options Considered:**
+  1. Leave `api/app.py` and `globe_map.js` as single files and only patch individual UI bugs.
+  2. Split `api/` into `schemas.py`, `datastore.py` (with `get_default_datastore()` singleton caching and injectable `store`), `exporters.py` (`EXPORTERS` strategy table), and `app.py`; make `DivergenceExplainer` rule-driven (`ExplorationRelevanceRule`, `BODY_CAVEAT_SPECS`); dispatch planetary synthesis via `_PLANETARY_SYNTHESIZERS`; and split frontend rendering into `ui/dom.js`, `components/starfield.js`, `components/color_scale.js`, `components/target_panel.js`, and `components/globe_map.js`.
+- **Decision:** Adopt Option 2. Each module now has a single axis of change (SRP) and uses strategy registries (`EXPORTERS`, `_PLANETARY_SYNTHESIZERS`, `ExplorationRelevanceRule`) for open/closed extensibility (OCP).
+- **Consequences:** Full `pytest` execution time dropped from ~35 s to ~9.5 s with 93.2% coverage; frontend DOM rendering is HTML-escaped and keyboard/ARIA-accessible; in-flight `/api/v1/rank` calls are guarded by `rankSeq` against race conditions.
+- **Related:** `REQUIREMENTS.md` (`FR-11`, `FR-13`, `FR-15`, `ER-1`, `ER-2`, `ER-4`), `.agents/skills/solid-principles/SKILL.md`
+
+
 
 
