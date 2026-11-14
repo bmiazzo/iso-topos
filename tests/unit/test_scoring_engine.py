@@ -10,7 +10,7 @@ from isotopos.core.models import (
     TargetLocation,
 )
 from isotopos.core.registry import DEFAULT_REGISTRY
-from isotopos.scoring.engine import AnalogScoringEngine
+from isotopos.scoring.engine import AnalogScoringEngine, PrepackedSiteIndex
 
 
 def _make_site(
@@ -130,3 +130,26 @@ def test_physical_range_filters_and_novelty_filter():
     )
     ids = [r.site.id for r in response.ranked_results]
     assert ids == ["qaqortorsuaq"]
+
+
+def test_prepacked_site_index_matches_standard_evaluation_and_supports_single_site():
+    """DEC-005 & NFR-1: PrepackedSiteIndex evaluates identically and supports single-site lookup."""
+    s1 = _make_site("s1", is_well_known=False, overrides={"slope_deg": 5.0, "mean_temp_c": -20.0})
+    s2 = _make_site("s2", is_well_known=True, overrides={"slope_deg": 18.0, "mean_temp_c": 15.0})
+    target = _make_target(overrides={"slope_deg": 4.0, "mean_temp_c": -25.0})
+
+    engine = AnalogScoringEngine(DEFAULT_REGISTRY)
+    prepacked = PrepackedSiteIndex.from_sites([s1, s2], DEFAULT_REGISTRY)
+
+    std_resp = engine.evaluate(sites=[s1, s2], target=target, top_k=2)
+    fast_resp = engine.evaluate_prepacked(
+        prepacked=prepacked,
+        target=target,
+        top_k=2,
+        include_dimension_scores=True,
+    )
+    assert fast_resp.cell_scores == std_resp.cell_scores
+    assert fast_resp.ranked_results[0].site.id == std_resp.ranked_results[0].site.id
+
+    single = engine.evaluate_single_site(site=s1, target=target)
+    assert single.overall_score == pytest.approx(std_resp.cell_scores["s1"])

@@ -13,7 +13,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">iso-topos</span>
-      <span class="brand-sub">Planetary → Earth Analog Engine</span>
+      <span class="brand-sub">Planetary → Earth Analog Engine • H3 Res 4 (26 km)</span>
     </div>
 
     <div class="topbar-controls">
@@ -32,6 +32,7 @@
         <span>Beyond Well-Known Sites</span>
       </label>
 
+      <button id="btn-toggle-spin" class="action-btn" title="Gently spin the 3D globe when idle">Auto-Spin: ON</button>
       <button id="btn-toggle-projection" class="action-btn">3D Globe: ON</button>
     </div>
   </header>
@@ -97,13 +98,24 @@
 
     <!-- Center 3D Earth Globe -->
     <section class="map-stage">
+      <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
       <div id="earth-map"></div>
 
-      <!-- Floating Layer Switcher -->
+      <!-- Floating Layer & Visual Switcher -->
       <div class="map-overlay-card top-left-overlay">
         <div class="overlay-row">
           <label for="layer-variable-select">Globe Color Layer:</label>
           <select id="layer-variable-select" class="select-input compact"></select>
+        </div>
+        <div class="overlay-row">
+          <label for="palette-select">Scientific Color Palette:</label>
+          <select id="palette-select" class="select-input compact">
+            <option value="bioluminescent">Bioluminescent Cyan-Gold</option>
+            <option value="viridis">Viridis (Colorblind-Safe)</option>
+            <option value="magma">Magma (Thermal Glow)</option>
+            <option value="plasma">Plasma (Solar / UV)</option>
+            <option value="turbo">Turbo (High-Contrast Spectrum)</option>
+          </select>
         </div>
         <div class="overlay-row">
           <label for="basemap-select">Satellite Imagery:</label>
@@ -114,8 +126,18 @@
           </select>
         </div>
         <div class="overlay-row">
-          <label for="hex-opacity">Hex Opacity:</label>
-          <input type="range" id="hex-opacity" min="0.15" max="0.95" step="0.05" value="0.72" />
+          <div class="slider-label-row">
+            <label for="hex-opacity">Hex Opacity (Score-Dynamic):</label>
+            <span id="hex-opacity-lbl">82%</span>
+          </div>
+          <input type="range" id="hex-opacity" min="0.20" max="0.98" step="0.02" value="0.82" />
+        </div>
+        <div class="overlay-row">
+          <div class="slider-label-row">
+            <label for="min-score-filter">Min Score Spotlight:</label>
+            <span id="min-score-lbl">0%</span>
+          </div>
+          <input type="range" id="min-score-filter" min="0" max="85" step="5" value="0" />
         </div>
         <label class="overlay-check">
           <input type="checkbox" id="chk-show-hotspots" checked />
@@ -123,10 +145,10 @@
         </label>
       </div>
 
-      <!-- Colorblind-Safe Viridis Legend -->
+      <!-- Dynamic Color Legend -->
       <div class="map-overlay-card bottom-left-overlay">
         <div id="legend-title" class="legend-title">Overall Similarity (%)</div>
-        <div class="viridis-bar"></div>
+        <div id="legend-gradient-bar" class="viridis-bar"></div>
         <div class="legend-ticks">
           <span id="legend-min">0%</span>
           <span id="legend-mid">50%</span>

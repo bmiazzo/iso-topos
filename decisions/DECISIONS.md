@@ -40,7 +40,7 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 
 ## DEC-002: Multi-Scale Spatial Indexing Strategy (Adaptive Earth H3 + Planetocentric Moon/Mars Grids)
 - **Date:** 2026-11-14
-- **Status:** Accepted
+- **Status:** Superseded by DEC-005
 - **Context:** Global comparison must avoid Mercator polar distortion (`FR-4`), support arbitrary Moon/Mars `(lat, lon)` extraction (`FR-3`), capture sub-grid features like caves and impact craters (`FR-5`, `parameters.md`), and render smoothly on integrated laptop graphics.
 - **Options Considered:**
   1. Adaptive H3 Land Grid (Res 2 globally + Res 3 in arid, polar, volcanic, anorthositic, alpine, and crater zones; ~4,500 cells) + 26 Curated Local Hotspots + Planetocentric `5° × 5°` `(lat, lon)` grids for Moon and Mars.
@@ -71,3 +71,15 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Decision:** Adopt Option 2. Clamping target parameters to Earth's physical bounds $[E_{\min}, E_{\max}]$ by default lets Earth's closest physical frontier (e.g., East Antarctica, Greenland anorthosite) score cleanly while `DivergenceExplainer` (`FR-11`) explicitly flags the physical gap $\Delta$, gravity, vacuum/6 mbar CO₂, ice sublimation vs. melting, and pitch-black shadow caveats.
 - **Consequences:** Scientists get both intuitive analog rankings and transparent physical honesty, with full control to toggle Strict mode or re-weight any parameter in Advanced Mode.
 - **Related:** `REQUIREMENTS.md` (`FR-10`, `FR-11`), `parameters.md`
+
+## DEC-005: Uniform H3 Resolution 4 Land Tiling with Natural Earth 50m Coastline Mask, Antimeridian Splitting, and Pre-Packed NumPy Scoring
+- **Date:** 2026-11-14
+- **Status:** Accepted
+- **Context:** The initial `DEC-002` spatial index used coarse lat/lon bounding boxes (`_is_earth_land`), mixed H3 Res 2 and Res 3 cells, and dropped cells crossing `±180°`. This caused open ocean regions (North Atlantic, Mediterranean, Red Sea, Southern Ocean) to be tiled, missed coastlines/islands, left vertical holes along the `±180°` antimeridian, and created jagged aperture-7 gaps/overlaps between Res 2 and Res 3 hexagons.
+- **Options Considered:**
+  1. Keep Adaptive H3 (Res 2 + Res 3) with a real coastline mask — fixes ocean tiles but retains aperture-7 seam gaps between Res 2 and Res 3 hexagons.
+  2. Uniform H3 Resolution 3 (~12,000 land cells, ~69 km edge) with Natural Earth coastline mask.
+  3. Uniform H3 Resolution 4 (~80,000 land cells, ~26 km edge) with Natural Earth 50m Land & Minor Islands polygons (`contain="overlap"`), antimeridian `MultiPolygon` splitting, lean GeoJSON geometry, and a pre-packed `float64`/`float32` NumPy matrix (`PrepackedSiteIndex`) in `AnalogScoringEngine`.
+- **Decision:** Adopt Option 3. Uniform H3 Resolution 4 is 49× finer in area than Res 2, hugs coastlines and islands naturally with zero Res 2/3 seam gaps and zero open-ocean tiles, and still evaluates in `< 25 ms` on the backend using a pre-packed `(N_sites × 17)` NumPy matrix and HTTP GZip compression.
+- **Consequences:** `data/raw/` vendors `ne_50m_land.geojson` and `ne_50m_minor_islands.geojson`; `etl/spatial_builder.py` uses `h3.polygon_to_cells_experimental` and splits antimeridian hexagons into valid `MultiPolygon` rings; `api/app.py` exposes `/api/v1/site/{site_id}` and `/api/v1/earth-grid/parameter/{param_id}` so any of the ~80,000 H3 cells can be clicked or colored by raw physical parameter without bloating the GeoJSON payload.
+- **Related:** `REQUIREMENTS.md` (`FR-4`, `FR-13`, `NFR-1`, `DR-2`), supersedes Earth H3 portion of `DEC-002`.

@@ -23,7 +23,7 @@
 - **FR-3b (Must) — Seamless Simple → Advanced Pre-fill:** Selecting a Moon/Mars preset or arbitrary coordinate in Simple mode must pre-fill the target parameter vector so the user can switch to Advanced mode to inspect, override, or fine-tune any parameter before re-running the evaluation algorithm.
 
 ### 2.2 Spatial Index & Discovery
-- **FR-4 (Must) — Global Spatial Grids (Earth, Moon & Mars):** Partition Earth into a pre-processed, distortion-resistant global spatial index (e.g., H3 hexagonal cells) for fair polar and mid-latitude comparison, and pre-process Moon and Mars datasets into lightweight backend spatial grids to support fast parameter extraction/extrapolation for arbitrary coordinates.
+- **FR-4 (Must) — Global Spatial Grids (Earth, Moon & Mars):** Partition Earth land and islands into a pre-processed, distortion-resistant, **uniform H3 Resolution 4 hexagonal mesh (~26 km edge, ~80,000 land cells)** masked against real vector coastlines (Natural Earth 50m Land & Minor Islands) with antimeridian (`±180°`) polygon splitting so zero open ocean is tiled, no coastal/island features are missed, and no mixed-resolution boundary gaps occur. Pre-process Moon and Mars datasets into lightweight backend spatial grids to support fast parameter extraction/extrapolation for arbitrary coordinates.
 - **FR-5 (Must) — Local Hotspot Overlays:** Support overlaying curated high-resolution local features (e.g., specific impact craters, lava tubes, caves, salt flats) that are smaller than a grid cell, enabling multi-scale discovery.
 - **FR-6 (Should) — Beyond Well-Known Sites:** Support filtering or highlighting lesser-known / under-studied regions (e.g., excluding or de-prioritizing well-known baseline sites like Atacama, Antarctica, Iceland, Hawaii) to surface previously unrecognized analogs.
 
@@ -48,7 +48,7 @@
 - **FR-12 (Could — Stretch) — AI-Assisted Scientific Explanation:** Integrate an AI/LLM model to inspect the active dimension weights, raw physical values, and similarity/divergence scores to generate a concise natural-language scientific summary of why a site was ranked as it was and how it could be used.
 
 ### 2.4 Scientist UI (Dual-Mode Interactive Map)
-- **FR-13 (Must) — Interactive Map in Both Modes:** Both Simple and Advanced interfaces must feature an interactive map displaying ranked Earth grid cells and hotspot overlays with interactive hover/click inspection, zoom/pan, and visual score encoding.
+- **FR-13 (Must) — Interactive Map in Both Modes:** Both Simple and Advanced interfaces must feature an interactive 3D Earth globe (with space atmosphere/starfield backdrop and 2D projection toggle) displaying ranked Earth grid cells and hotspot overlays with universal hover/click inspection (clicking any H3 cell or hotspot opens its full breakdown), zoom/pan, selectable scientific color palettes, score-driven dynamic opacity, a minimum-score spotlight threshold filter, and zoom-adaptive honeycomb outlines.
 - **FR-14 (Must) — Simple Mode:**
   - Mission/target preset selector (Moon & Mars sites) and arbitrary Moon/Mars `(lat, lon)` coordinate input (plus clickable 2D Moon/Mars map as `FR-3a`)
   - Interactive Earth map showing top-ranked Earth analogs
@@ -75,7 +75,7 @@
 
 ## 4. Non-Functional Requirements
 
-- **NFR-1 (Must) — Interactive Responsiveness:** Re-ranking and filtering across the pre-processed spatial index should feel instantaneous (< 500 ms for typical preset/weight updates) to support live scientific exploration and demo presentation.
+- **NFR-1 (Must) — Interactive Responsiveness:** Re-ranking and filtering across the pre-processed high-resolution spatial index (~80,000 H3 Res 4 cells) should compute in `< 100 ms` on the backend via pre-packed vectorized NumPy matrices and update client globe colors smoothly within `< 1–2 s` to support live scientific exploration and demo presentation.
 - **NFR-2 (Must) — No Auth Friction:** Public/open read-only access with no login or account required for the hackathon demo.
 - **NFR-3 (Should) — Reproducible Local Setup:** The application and offline ETL pipeline must be runnable locally with clear, documented commands and minimal environment setup.
 - **NFR-4 (Should) — Accessibility & Clarity:** Scientific units, color scales (colorblind-safe palettes recommended), and caveats must be clearly labeled on all charts and map legends.

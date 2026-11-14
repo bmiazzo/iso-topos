@@ -7,6 +7,8 @@ from isotopos.core.registry import DEFAULT_REGISTRY
 from isotopos.etl.catalog_data import EARTH_HOTSPOTS, PLANETARY_PRESETS
 from isotopos.etl.interpolator import PlanetaryGridInterpolator
 from isotopos.etl.spatial_builder import (
+    _load_land_h3_cells,
+    _safe_hex_geometry,
     build_earth_h3_grid,
     build_planetary_grid,
     compute_grazing_sun_hours,
@@ -68,7 +70,9 @@ def test_planetary_grid_interpolator_handles_coordinates_and_extrapolation_flags
 
 
 def test_adaptive_h3_earth_grid_builds_valid_geojson_and_parameters():
-    """FR-4 & DR-2: Adaptive H3 grid builds valid land cells with no antimeridian spikes."""
+    """FR-4 & DR-2: Uniform H3 Res 4 grid builds valid land cells with no antimeridian spikes."""
+    import h3
+
     sites, geojson = build_earth_h3_grid(max_cells=600)
     assert len(sites) >= 200
     assert geojson["type"] == "FeatureCollection"
@@ -76,14 +80,77 @@ def test_adaptive_h3_earth_grid_builds_valid_geojson_and_parameters():
 
     param_ids = {p.id for p in DEFAULT_REGISTRY.parameters}
     for site in sites[:25]:
+        assert h3.get_resolution(site.id) == 4
         assert set(site.parameters.keys()) == param_ids
 
     for feat in geojson["features"]:
-        ring = feat["geometry"]["coordinates"][0]
+        geom = feat["geometry"]
+        assert geom["type"] in ("Polygon", "MultiPolygon")
+        rings = [geom["coordinates"][0]] if geom["type"] == "Polygon" else [p[0] for p in geom["coordinates"]]
+        for ring in rings:
+            lons = [pt[0] for pt in ring]
+            lats = [pt[1] for pt in ring]
+            assert max(lons) - min(lons) <= 90.0
+            assert min(lats) >= -85.0 and max(lats) <= 85.0
+
+
+def test_antimeridian_hex_geometry_splits_cleanly_into_multipolygon():
+    """FR-4 & DEC-005: Antimeridian H3 cells split into valid MultiPolygon halves instead of being dropped."""
+    import h3
+
+    antimeridian_cid = h3.latlng_to_cell(66.5, 179.95, 4)
+    geom = _safe_hex_geometry(antimeridian_cid)
+    assert geom is not None
+    assert geom["type"] == "MultiPolygon"
+    assert len(geom["coordinates"]) == 2
+    for poly in geom["coordinates"]:
+        ring = poly[0]
         lons = [pt[0] for pt in ring]
         lats = [pt[1] for pt in ring]
-        assert max(lons) - min(lons) <= 90.0
-        assert min(lats) >= -85.0 and max(lats) <= 85.0
+        assert max(lons) - min(lons) <= 10.0
+        assert min(lons) >= -180.0 and max(lons) <= 180.0
+        assert min(lats) >= -84.95 and max(lats) <= 84.95
+
+
+def test_natural_earth_coastline_mask_excludes_oceans_and_includes_islands():
+    """FR-4 & DEC-005: Natural Earth 50m mask excludes open oceans and includes continents, islands, and hotspots."""
+    import h3
+
+    cells = _load_land_h3_cells(res=4)
+    assert len(cells) > 70000
+
+    # All 26 curated hotspots must be covered
+    for hs in EARTH_HOTSPOTS:
+        if abs(hs.lat) <= 84.5:
+            assert h3.latlng_to_cell(hs.lat, hs.lon, 4) in cells, f"Missing hotspot {hs.id}"
+
+    # Key islands, peninsulas, polar sites, and antimeridian regions must be present
+    expected_land = [
+        (19.82, -155.47),   # Hawaii
+        (65.03, -16.75),    # Iceland
+        (78.90, 16.00),     # Svalbard
+        (28.27, -16.64),    # Canary Islands
+        (66.50, 179.50),    # Chukotka East
+        (66.50, -179.50),   # Chukotka West
+        (-43.50, 170.50),   # New Zealand
+        (-77.50, 162.50),   # McMurdo Dry Valleys (Antarctica)
+        (-80.37, 77.35),    # Dome A (East Antarctica)
+    ]
+    for lat, lon in expected_land:
+        assert h3.latlng_to_cell(lat, lon, 4) in cells, f"Missing land ({lat}, {lon})"
+
+    # Open oceans & seas that were erroneously tiled by the old box mask must be False
+    expected_ocean = [
+        (40.0, -35.0),      # Mid-North Atlantic
+        (36.0, 18.0),       # Central Mediterranean Sea
+        (20.0, 38.5),       # Red Sea
+        (-30.0, -130.0),    # South Pacific
+        (-20.0, 80.0),      # Indian Ocean
+        (-60.0, 0.0),       # Southern Ocean
+        (-75.0, -175.0),    # Ross Sea open water
+    ]
+    for lat, lon in expected_ocean:
+        assert h3.latlng_to_cell(lat, lon, 4) not in cells, f"Ocean tiled at ({lat}, {lon})"
 
 
 def test_scientific_sanity_lunar_south_pole_and_mars_astrobiology_rankings():

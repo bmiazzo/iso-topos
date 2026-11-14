@@ -1,4 +1,4 @@
-"""FastAPI application factory and REST endpoints (FR-1..FR-15, DR-2, DR-3, NFR-1)."""
+"""FastAPI application factory and REST endpoints (FR-1..FR-15, DR-2, DR-3, NFR-1, DEC-005)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -25,7 +26,7 @@ from isotopos.core.registry import DEFAULT_REGISTRY
 from isotopos.etl.catalog_data import EARTH_HOTSPOTS, PLANETARY_PRESETS
 from isotopos.etl.interpolator import PlanetaryGridInterpolator
 from isotopos.etl.spatial_builder import build_earth_h3_grid, build_planetary_grid
-from isotopos.scoring.engine import AnalogScoringEngine
+from isotopos.scoring.engine import AnalogScoringEngine, PrepackedSiteIndex
 
 
 class TargetExtractRequest(BaseModel):
@@ -46,10 +47,19 @@ class RankRequest(BaseModel):
     filters: list[PhysicalFilter] = Field(default_factory=list)
     exclude_well_known: bool = False
     top_k: int = Field(default=15, ge=1, le=100)
+    dimension_id: str | None = None
+
+
+class SiteInspectRequest(BaseModel):
+    """Request body for inspecting any single Earth H3 cell or hotspot."""
+
+    target: TargetLocation
+    weights: dict[str, float] | None = None
+    mode: ScoringMode = ScoringMode.CLAMPED
 
 
 class DataStore:
-    """In-memory pre-loaded spatial index and engine container."""
+    """In-memory pre-loaded spatial index and pre-packed NumPy matrix container."""
 
     def __init__(self, data_dir: Path | None = None) -> None:
         root = Path(__file__).resolve().parents[3]
@@ -57,7 +67,7 @@ class DataStore:
 
         if (processed / "earth_h3_sites.json").exists():
             raw_sites = json.loads((processed / "earth_h3_sites.json").read_text(encoding="utf-8"))
-            self.h3_sites = [EarthSite(**s) for s in raw_sites]
+            self.h3_sites = [EarthSite.model_construct(**s) for s in raw_sites]
             self.earth_geojson = json.loads(
                 (processed / "earth_h3_grid.geojson").read_text(encoding="utf-8")
             )
@@ -76,6 +86,9 @@ class DataStore:
             moon_grid = build_planetary_grid(PlanetaryBody.MOON, step_deg=10.0)
             mars_grid = build_planetary_grid(PlanetaryBody.MARS, step_deg=10.0)
 
+        self.h3_prepacked = PrepackedSiteIndex.from_sites(self.h3_sites, DEFAULT_REGISTRY)
+        self.hotspot_prepacked = PrepackedSiteIndex.from_sites(self.hotspots, DEFAULT_REGISTRY)
+
         self.interpolator = PlanetaryGridInterpolator(
             registry=DEFAULT_REGISTRY,
             presets=self.presets,
@@ -90,8 +103,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     application = FastAPI(
         title="iso-topos API",
         description="Planetary-to-Earth Analog Discovery & Characterization Engine",
-        version="0.1.0",
+        version="0.2.0",
     )
+    application.add_middleware(GZipMiddleware, minimum_size=1000)
+
     store = DataStore(data_dir=data_dir)
     static_dir = Path(__file__).resolve().parent.parent / "static"
 
@@ -127,6 +142,15 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def get_earth_grid() -> JSONResponse:
         return JSONResponse(content=store.earth_geojson)
 
+    @application.get("/api/v1/earth-grid/parameter/{param_id}")
+    def get_earth_grid_parameter(param_id: str) -> dict[str, Any]:
+        if param_id not in store.h3_prepacked.param_col_index:
+            raise HTTPException(status_code=404, detail=f"Unknown parameter_id '{param_id}'")
+        return {
+            "parameter_id": param_id,
+            "values": store.h3_prepacked.get_parameter_map(param_id),
+        }
+
     @application.post("/api/v1/target/extract")
     def extract_target(req: TargetExtractRequest) -> dict[str, Any]:
         if req.preset_id:
@@ -149,23 +173,26 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @application.post("/api/v1/rank")
     def rank_analogs(req: RankRequest) -> dict[str, Any]:
-        h3_eval = store.engine.evaluate(
-            sites=store.h3_sites,
+        h3_eval = store.engine.evaluate_prepacked(
+            prepacked=store.h3_prepacked,
             target=req.target,
             weights=req.weights,
             mode=req.mode,
             filters=req.filters,
             exclude_well_known=req.exclude_well_known,
             top_k=req.top_k,
+            include_dimension_scores=req.dimension_id is not None,
+            dimension_id=req.dimension_id,
         )
-        hotspot_eval = store.engine.evaluate(
-            sites=store.hotspots,
+        hotspot_eval = store.engine.evaluate_prepacked(
+            prepacked=store.hotspot_prepacked,
             target=req.target,
             weights=req.weights,
             mode=req.mode,
             filters=req.filters,
             exclude_well_known=req.exclude_well_known,
             top_k=None,
+            include_dimension_scores=False,
         )
         return {
             "all_weights_zero": h3_eval.all_weights_zero,
@@ -177,13 +204,26 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             "hotspot_results": [r.model_dump() for r in hotspot_eval.ranked_results],
         }
 
+    @application.post("/api/v1/site/{site_id}")
+    def inspect_site(site_id: str, req: SiteInspectRequest) -> dict[str, Any]:
+        site = store.h3_prepacked.site_by_id.get(site_id) or store.hotspot_prepacked.site_by_id.get(site_id)
+        if site is None:
+            raise HTTPException(status_code=404, detail=f"Site '{site_id}' not found.")
+        res = store.engine.evaluate_single_site(
+            site=site,
+            target=req.target,
+            weights=req.weights,
+            mode=req.mode,
+        )
+        return res.model_dump()
+
     @application.post("/api/v1/export")
     def export_results(
         req: RankRequest,
         format: Literal["csv", "json"] = Query(default="csv"),
     ) -> Response:
-        hotspot_eval = store.engine.evaluate(
-            sites=store.hotspots,
+        hotspot_eval = store.engine.evaluate_prepacked(
+            prepacked=store.hotspot_prepacked,
             target=req.target,
             weights=req.weights,
             mode=req.mode,
@@ -191,8 +231,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             exclude_well_known=req.exclude_well_known,
             top_k=None,
         )
-        h3_eval = store.engine.evaluate(
-            sites=store.h3_sites,
+        h3_eval = store.engine.evaluate_prepacked(
+            prepacked=store.h3_prepacked,
             target=req.target,
             weights=req.weights,
             mode=req.mode,

@@ -1,18 +1,61 @@
-// iso-topos Dual-Mode 3D Globe Scientist UI
+// iso-topos Dual-Mode 3D Globe Scientist UI (H3 Res 4 + Captivating Visualization)
+
+const PALETTES = {
+  bioluminescent: [
+    [0.0, "#0b1938"],
+    [0.3, "#0e4d7a"],
+    [0.58, "#06b6d4"],
+    [0.82, "#10b981"],
+    [1.0, "#fef08a"],
+  ],
+  viridis: [
+    [0.0, "#440154"],
+    [0.25, "#3b528b"],
+    [0.5, "#21918c"],
+    [0.75, "#5ec962"],
+    [1.0, "#fde725"],
+  ],
+  magma: [
+    [0.0, "#140b34"],
+    [0.3, "#51127c"],
+    [0.6, "#b73779"],
+    [0.82, "#fc8961"],
+    [1.0, "#fcfdbf"],
+  ],
+  plasma: [
+    [0.0, "#0d0887"],
+    [0.3, "#6a00a8"],
+    [0.6, "#b12a90"],
+    [0.82, "#e16462"],
+    [1.0, "#f0f921"],
+  ],
+  turbo: [
+    [0.0, "#30123b"],
+    [0.25, "#28bbec"],
+    [0.5, "#a2fc3c"],
+    [0.75, "#fb8022"],
+    [1.0, "#7a0403"],
+  ],
+};
 
 const state = {
   metadata: null,
   earthGeojson: null,
+  rawParamCache: {},
   body: "moon",
   mode: "simple",
   scoringMode: "clamped",
   excludeWellKnown: false,
   showHotspots: true,
   isGlobe: true,
+  autoSpin: true,
+  userInteracting: false,
   activeTab: "hotspots",
   activeLayer: "overall_score",
+  palette: "bioluminescent",
   basemap: "gibs_bluemarble",
-  hexOpacity: 0.72,
+  hexOpacity: 0.82,
+  minScoreFilter: 0,
   target: null,
   weights: {},
   lastRankResponse: null,
@@ -22,15 +65,9 @@ const state = {
   rankDebounce: null,
 };
 
-const VIRIDIS_STOPS = [
-  [0.0, "#440154"],
-  [0.25, "#3b528b"],
-  [0.5, "#21918c"],
-  [0.75, "#5ec962"],
-  [1.0, "#fde725"],
-];
-
 async function init() {
+  initStarfield();
+
   const [metaResp, geoResp] = await Promise.all([
     fetch("/api/v1/metadata"),
     fetch("/api/v1/earth-grid"),
@@ -41,14 +78,70 @@ async function init() {
   populateLayerSwitcher();
   populatePresetDropdown();
   buildAdvancedControls();
+  updateLegendGradient();
   initEarthMap();
   bindUIEvents();
+  startAutoSpinLoop();
 
-  // Select first Moon preset by default
   const firstPreset = state.metadata.presets.find((p) => p.body === state.body);
   if (firstPreset) {
     await selectPreset(firstPreset.id);
   }
+}
+
+function initStarfield() {
+  const canvas = document.getElementById("starfield-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+
+  function renderStars() {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = Math.max(300, Math.floor(rect.width));
+    canvas.height = Math.max(300, Math.floor(rect.height));
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+
+    // Subtle deep-space nebula glow
+    const grad = ctx.createRadialGradient(w * 0.5, h * 0.5, w * 0.12, w * 0.5, h * 0.5, w * 0.65);
+    grad.addColorStop(0, "rgba(14, 116, 144, 0.16)");
+    grad.addColorStop(0.5, "rgba(30, 58, 138, 0.08)");
+    grad.addColorStop(1, "rgba(2, 6, 23, 0.0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Deterministic star distribution
+    let seed = 1337;
+    const rand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    };
+
+    const starCount = 320;
+    for (let i = 0; i < starCount; i++) {
+      const x = rand() * w;
+      const y = rand() * h;
+      const r = rand() < 0.85 ? 0.6 + rand() * 0.7 : 1.3 + rand() * 1.1;
+      const alpha = 0.25 + rand() * 0.7;
+      const tint = rand() < 0.3 ? "186, 230, 253" : rand() < 0.6 ? "254, 243, 199" : "241, 245, 249";
+      ctx.fillStyle = `rgba(${tint}, ${alpha.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  renderStars();
+  window.addEventListener("resize", renderStars);
+}
+
+function updateLegendGradient() {
+  const bar = document.getElementById("legend-gradient-bar");
+  if (!bar) return;
+  const stops = PALETTES[state.palette] || PALETTES.bioluminescent;
+  const cssStops = stops.map(([t, col]) => `${col} ${Math.round(t * 100)}%`).join(", ");
+  bar.style.background = `linear-gradient(90deg, ${cssStops})`;
 }
 
 function populateLayerSwitcher() {
@@ -238,12 +331,22 @@ function buildActiveFilters() {
 
 function scheduleRank() {
   clearTimeout(state.rankDebounce);
-  state.rankDebounce = setTimeout(runRank, 90);
+  state.rankDebounce = setTimeout(runRank, 110);
+}
+
+async function ensureRawParameterLoaded(paramId) {
+  if (state.rawParamCache[paramId]) return state.rawParamCache[paramId];
+  const resp = await fetch(`/api/v1/earth-grid/parameter/${paramId}`);
+  const data = await resp.json();
+  state.rawParamCache[paramId] = data.values || {};
+  return state.rawParamCache[paramId];
 }
 
 async function runRank() {
   if (!state.target) return;
   const t0 = performance.now();
+  const activeDimId = state.activeLayer.startsWith("dim:") ? state.activeLayer.slice(4) : null;
+
   const payload = {
     target: state.target,
     weights: state.weights,
@@ -251,6 +354,7 @@ async function runRank() {
     filters: buildActiveFilters(),
     exclude_well_known: state.excludeWellKnown,
     top_k: 15,
+    dimension_id: activeDimId,
   };
 
   const resp = await fetch("/api/v1/rank", {
@@ -262,10 +366,10 @@ async function runRank() {
   state.lastRankResponse = data;
 
   const dt = Math.round(performance.now() - t0);
-  document.getElementById("eval-timing").textContent = `${data.filtered_h3_count} cells • ${dt} ms`;
+  document.getElementById("eval-timing").textContent = `${data.filtered_h3_count.toLocaleString()} cells • ${dt} ms`;
   document.getElementById("all-zero-warning").classList.toggle("hidden", !data.all_weights_zero);
 
-  updateEarthMapLayers();
+  await updateEarthMapLayers(true);
   renderRankedList();
 
   const defaultPool = state.activeTab === "hotspots" ? data.hotspot_results : data.top_h3_results;
@@ -277,10 +381,39 @@ async function runRank() {
   }
 }
 
+async function inspectAnySiteById(siteId) {
+  if (!state.target || !siteId) return;
+  const cached = [
+    ...(state.lastRankResponse?.hotspot_results || []),
+    ...(state.lastRankResponse?.top_h3_results || []),
+  ].find((r) => r.site.id === siteId);
+  if (cached) {
+    showBreakdown(cached);
+    return;
+  }
+
+  const resp = await fetch(`/api/v1/site/${encodeURIComponent(siteId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      target: state.target,
+      weights: state.weights,
+      mode: state.scoringMode,
+    }),
+  });
+  if (resp.ok) {
+    const result = await resp.json();
+    showBreakdown(result);
+  }
+}
+
 function initEarthMap() {
   const style = {
     version: 8,
     projection: { type: "globe" },
+    sky: {
+      "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 0.88, 5, 0.38, 7, 0.0],
+    },
     sources: {
       gibs_bluemarble: {
         type: "raster",
@@ -302,7 +435,7 @@ function initEarthMap() {
       },
     },
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#050914" } },
+      { id: "bg", type: "background", paint: { "background-color": "rgba(4, 8, 18, 0.0)" } },
       { id: "gibs_bluemarble", type: "raster", source: "gibs_bluemarble" },
       {
         id: "gibs_modis",
@@ -316,11 +449,27 @@ function initEarthMap() {
   const map = new maplibregl.Map({
     container: "earth-map",
     style,
-    center: [-25, 35],
-    zoom: 1.5,
+    center: [-20, 28],
+    zoom: 1.55,
   });
 
   map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+  const pauseSpin = () => {
+    state.userInteracting = true;
+  };
+  const resumeSpin = () => {
+    state.userInteracting = false;
+  };
+  map.on("mousedown", pauseSpin);
+  map.on("touchstart", pauseSpin);
+  map.on("wheel", () => {
+    state.userInteracting = true;
+    clearTimeout(map._wheelTimeout);
+    map._wheelTimeout = setTimeout(resumeSpin, 2200);
+  });
+  map.on("mouseup", resumeSpin);
+  map.on("touchend", resumeSpin);
 
   map.on("style.load", () => {
     map.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
@@ -337,9 +486,34 @@ function initEarthMap() {
       type: "fill",
       source: "earth-h3",
       paint: {
-        "fill-color": "#21918c",
+        "fill-color": "#06b6d4",
         "fill-opacity": state.hexOpacity,
-        "fill-outline-color": "rgba(255,255,255,0.12)",
+        "fill-antialias": false,
+      },
+    });
+
+    // Zoom-adaptive honeycomb outlines: invisible from space, crisp hexagonal mesh when zoomed in
+    map.addLayer({
+      id: "earth-h3-outline",
+      type: "line",
+      source: "earth-h3",
+      paint: {
+        "line-color": "rgba(226, 232, 240, 0.55)",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 2.0, 0.2, 4.0, 0.6, 6.5, 1.2],
+        "line-opacity": ["interpolate", ["linear"], ["zoom"], 2.2, 0.0, 3.3, 0.18, 5.2, 0.45],
+      },
+    });
+
+    // Selected H3 hexagon highlight ring
+    map.addLayer({
+      id: "earth-h3-selected",
+      type: "line",
+      source: "earth-h3",
+      filter: ["==", ["get", "id"], ""],
+      paint: {
+        "line-color": "#38bdf8",
+        "line-width": 2.6,
+        "line-opacity": 0.98,
       },
     });
 
@@ -348,12 +522,25 @@ function initEarthMap() {
       data: { type: "FeatureCollection", features: [] },
     });
 
+    // Outer glow halo on hotspots
+    map.addLayer({
+      id: "earth-hotspots-glow",
+      type: "circle",
+      source: "earth-hotspots",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 10, 5.0, 15],
+        "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
+        "circle-opacity": 0.28,
+        "circle-blur": 0.65,
+      },
+    });
+
     map.addLayer({
       id: "earth-hotspots-circle",
       type: "circle",
       source: "earth-hotspots",
       paint: {
-        "circle-radius": 6.5,
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 5.5, 5.0, 8.0],
         "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
         "circle-stroke-width": 1.6,
         "circle-stroke-color": "#ffffff",
@@ -364,10 +551,16 @@ function initEarthMap() {
 
     map.on("mousemove", "earth-h3-fill", (e) => {
       if (!e.features?.length) return;
-      map.getCanvas().style.cursor = "pointer";
       const props = e.features[0].properties;
-      const val = props._display_val ?? 0;
-      tooltip.innerHTML = `<strong>${props.name}</strong><br/>${props.region}<br/>Value: ${Number(val).toFixed(2)}`;
+      const val = props._display_val ?? -999999;
+      if (val <= -99999) {
+        map.getCanvas().style.cursor = "";
+        tooltip.classList.add("hidden");
+        return;
+      }
+      map.getCanvas().style.cursor = "pointer";
+      const unitSuffix = state.activeLayer.startsWith("raw:") ? "" : "%";
+      tooltip.innerHTML = `<strong>${props.name}</strong><br/>${props.region}<br/>Value: <b>${Number(val).toFixed(1)}${unitSuffix}</b>`;
       tooltip.style.left = `${e.point.x + 14}px`;
       tooltip.style.top = `${e.point.y + 14}px`;
       tooltip.classList.remove("hidden");
@@ -381,24 +574,43 @@ function initEarthMap() {
     map.on("click", "earth-hotspots-circle", (e) => {
       if (!e.features?.length) return;
       const id = e.features[0].properties.id;
-      const match = state.lastRankResponse?.hotspot_results.find((r) => r.site.id === id);
-      if (match) showBreakdown(match);
+      inspectAnySiteById(id);
     });
 
     map.on("click", "earth-h3-fill", (e) => {
       if (!e.features?.length) return;
       const id = e.features[0].properties.id;
-      const match = state.lastRankResponse?.top_h3_results.find((r) => r.site.id === id);
-      if (match) showBreakdown(match);
+      inspectAnySiteById(id);
     });
 
-    updateEarthMapLayers();
+    updateEarthMapLayers(true);
   });
 
   state.map = map;
 }
 
-function updateEarthMapLayers() {
+function startAutoSpinLoop() {
+  let lastTime = performance.now();
+  function frame(now) {
+    const dt = (now - lastTime) / 1000.0;
+    lastTime = now;
+    if (
+      state.map &&
+      state.isGlobe &&
+      state.autoSpin &&
+      !state.userInteracting &&
+      state.map.getZoom() < 2.8
+    ) {
+      const center = state.map.getCenter();
+      center.lng = ((center.lng + dt * 2.4 + 180) % 360) - 180;
+      state.map.setCenter(center);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+async function updateEarthMapLayers(updateData = true) {
   if (!state.map || !state.map.isStyleLoaded() || !state.lastRankResponse) return;
 
   const { cell_scores, cell_dimension_scores, hotspot_results } = state.lastRankResponse;
@@ -407,12 +619,14 @@ function updateEarthMapLayers() {
   let minVal = 0;
   let maxVal = 100;
   let legendTitle = "Overall Similarity (%)";
+  let isScoreLayer = true;
 
   if (layerKey.startsWith("dim:")) {
     const dimId = layerKey.slice(4);
     const dim = state.metadata.dimensions.find((d) => d.id === dimId);
     legendTitle = `${dim?.name || dimId} Match (%)`;
   } else if (layerKey.startsWith("raw:")) {
+    isScoreLayer = false;
     const pId = layerKey.slice(4);
     const param = state.metadata.parameters.find((p) => p.id === pId);
     minVal = param.earth_min;
@@ -425,48 +639,83 @@ function updateEarthMapLayers() {
   document.getElementById("legend-mid").textContent = `${Math.round((minVal + maxVal) / 2)}`;
   document.getElementById("legend-max").textContent = `${maxVal}`;
 
-  const features = [];
-  for (const feat of state.earthGeojson.features) {
-    const id = feat.properties.id;
-    if (!(id in cell_scores)) continue; // Filtered out by physical range filters
-
-    let displayVal = 0;
-    if (layerKey === "overall_score") {
-      displayVal = cell_scores[id] * 100.0;
-    } else if (layerKey.startsWith("dim:")) {
-      const sub = cell_dimension_scores[id]?.[layerKey.slice(4)];
-      displayVal = sub === null || sub === undefined ? -1 : sub * 100.0;
-    } else if (layerKey.startsWith("raw:")) {
-      displayVal = feat.properties[layerKey.slice(4)] ?? 0;
+  if (updateData) {
+    let rawMap = null;
+    if (layerKey.startsWith("raw:")) {
+      rawMap = await ensureRawParameterLoaded(layerKey.slice(4));
     }
 
-    features.push({
-      ...feat,
-      properties: {
-        ...feat.properties,
-        _display_val: displayVal,
-      },
-    });
+    const dimId = layerKey.startsWith("dim:") ? layerKey.slice(4) : null;
+    for (const feat of state.earthGeojson.features) {
+      const id = feat.properties.id;
+      if (!(id in cell_scores)) {
+        feat.properties._display_val = -999999;
+        continue;
+      }
+
+      if (layerKey === "overall_score") {
+        feat.properties._display_val = cell_scores[id] * 100.0;
+      } else if (dimId) {
+        const sub = cell_dimension_scores[id]?.[dimId];
+        feat.properties._display_val = sub === null || sub === undefined ? -999999 : sub * 100.0;
+      } else if (rawMap) {
+        feat.properties._display_val = rawMap[id] ?? 0;
+      }
+    }
+
+    state.map.getSource("earth-h3")?.setData(state.earthGeojson);
   }
 
-  state.map.getSource("earth-h3")?.setData({
-    type: "FeatureCollection",
-    features,
-  });
+  const paletteStops = PALETTES[state.palette] || PALETTES.bioluminescent;
+  const effectiveCutoff = isScoreLayer ? Math.max(minVal, state.minScoreFilter) : minVal;
 
   const colorExpr = [
     "case",
-    ["<", ["get", "_display_val"], minVal],
-    "#334155",
+    ["<", ["get", "_display_val"], effectiveCutoff],
+    "rgba(15, 23, 42, 0.0)",
     [
       "interpolate",
       ["linear"],
       ["get", "_display_val"],
-      ...VIRIDIS_STOPS.flatMap(([t, col]) => [minVal + t * (maxVal - minVal), col]),
+      ...paletteStops.flatMap(([t, col]) => [minVal + t * (maxVal - minVal), col]),
     ],
   ];
+
+  // Score-driven dynamic opacity: low-scoring cells are translucent, top matches glow vividly
+  const span = Math.max(1e-6, maxVal - effectiveCutoff);
+  const sLow = effectiveCutoff;
+  const sMid = effectiveCutoff + 0.45 * span;
+  const sHigh = effectiveCutoff + 0.78 * span;
+
+  const opacityExpr = isScoreLayer
+    ? [
+        "case",
+        ["<", ["get", "_display_val"], effectiveCutoff],
+        0.0,
+        [
+          "interpolate",
+          ["linear"],
+          ["get", "_display_val"],
+          sLow,
+          Number((state.hexOpacity * 0.24).toFixed(3)),
+          sMid,
+          Number((state.hexOpacity * 0.58).toFixed(3)),
+          sHigh,
+          Number((state.hexOpacity * 0.92).toFixed(3)),
+          maxVal,
+          Number(state.hexOpacity.toFixed(3)),
+        ],
+      ]
+    : [
+        "case",
+        ["<=", ["get", "_display_val"], -99999],
+        0.0,
+        Number((state.hexOpacity * 0.85).toFixed(3)),
+      ];
+
   state.map.setPaintProperty("earth-h3-fill", "fill-color", colorExpr);
-  state.map.setPaintProperty("earth-h3-fill", "fill-opacity", state.hexOpacity);
+  state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);
+  state.map.setFilter("earth-h3-outline", [">=", ["get", "_display_val"], effectiveCutoff]);
 
   const hsFeatures = state.showHotspots
     ? hotspot_results.map((r) => ({
@@ -502,7 +751,7 @@ function renderRankedList() {
     const item = document.createElement("div");
     item.className = `rank-item ${r.site.id === state.selectedSiteId ? "selected" : ""}`;
     const pct = (r.overall_score * 100).toFixed(1);
-    const tag = r.site.site_type === "hotspot" ? (r.site.is_well_known ? "Baseline" : "Novel") : "H3 Cell";
+    const tag = r.site.site_type === "hotspot" ? (r.site.is_well_known ? "Baseline" : "Novel") : "H3 Res 4";
     item.innerHTML = `
       <div>
         <div class="rank-item-name">${r.site.name}</div>
@@ -511,8 +760,12 @@ function renderRankedList() {
       <div class="score-pill">${pct}%</div>
     `;
     item.addEventListener("click", () => {
+      state.userInteracting = true;
       showBreakdown(r);
-      state.map?.flyTo({ center: [r.site.lon, r.site.lat], zoom: 4.0 });
+      state.map?.flyTo({ center: [r.site.lon, r.site.lat], zoom: 4.5 });
+      setTimeout(() => {
+        state.userInteracting = false;
+      }, 2500);
     });
     listEl.appendChild(item);
   }
@@ -520,6 +773,10 @@ function renderRankedList() {
 
 function showBreakdown(result) {
   state.selectedSiteId = result.site.id;
+  if (state.map && state.map.getLayer("earth-h3-selected")) {
+    state.map.setFilter("earth-h3-selected", ["==", ["get", "id"], result.site.id]);
+  }
+
   document.getElementById("breakdown-card").classList.remove("hidden");
   document.getElementById("detail-name").textContent = result.site.name;
   document.getElementById("detail-meta").textContent =
@@ -615,7 +872,6 @@ function drawPlanetaryPicker() {
   ctx.fillStyle = state.body === "moon" ? "#1e2430" : "#3a1e16";
   ctx.fillRect(0, 0, w, h);
 
-  // Subtle surface albedo patches
   ctx.fillStyle = state.body === "moon" ? "rgba(15, 18, 26, 0.45)" : "rgba(95, 42, 24, 0.35)";
   for (let i = 0; i < 18; i++) {
     const rx = ((i * 73) % 280) + 10;
@@ -625,7 +881,6 @@ function drawPlanetaryPicker() {
     ctx.fill();
   }
 
-  // Lat/Lon Graticule
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
   ctx.lineWidth = 1;
   for (let gx = 0; gx <= w; gx += w / 6) {
@@ -641,7 +896,6 @@ function drawPlanetaryPicker() {
     ctx.stroke();
   }
 
-  // Draw presets
   for (const p of state.metadata.presets.filter((pr) => pr.body === state.body)) {
     const lonNorm = ((p.lon % 360) + 360) % 360;
     const x = (lonNorm / 360) * w;
@@ -652,7 +906,6 @@ function drawPlanetaryPicker() {
     ctx.fill();
   }
 
-  // Active target crosshair
   if (state.target) {
     const lonNorm = ((state.target.lon % 360) + 360) % 360;
     const x = (lonNorm / 360) * w;
@@ -727,6 +980,11 @@ function bindUIEvents() {
     runRank();
   });
 
+  document.getElementById("btn-toggle-spin").addEventListener("click", (e) => {
+    state.autoSpin = !state.autoSpin;
+    e.target.textContent = state.autoSpin ? "Auto-Spin: ON" : "Auto-Spin: OFF";
+  });
+
   document.getElementById("btn-toggle-projection").addEventListener("click", (e) => {
     state.isGlobe = !state.isGlobe;
     state.map?.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
@@ -763,9 +1021,19 @@ function bindUIEvents() {
     document.getElementById(id).addEventListener("change", scheduleRank);
   }
 
-  document.getElementById("layer-variable-select").addEventListener("change", (e) => {
+  document.getElementById("layer-variable-select").addEventListener("change", async (e) => {
     state.activeLayer = e.target.value;
-    updateEarthMapLayers();
+    if (state.activeLayer.startsWith("dim:")) {
+      await runRank();
+    } else {
+      await updateEarthMapLayers(true);
+    }
+  });
+
+  document.getElementById("palette-select").addEventListener("change", (e) => {
+    state.palette = e.target.value;
+    updateLegendGradient();
+    updateEarthMapLayers(false);
   });
 
   document.getElementById("basemap-select").addEventListener("change", (e) => {
@@ -785,12 +1053,19 @@ function bindUIEvents() {
 
   document.getElementById("hex-opacity").addEventListener("input", (e) => {
     state.hexOpacity = parseFloat(e.target.value);
-    updateEarthMapLayers();
+    document.getElementById("hex-opacity-lbl").textContent = `${Math.round(state.hexOpacity * 100)}%`;
+    updateEarthMapLayers(false);
+  });
+
+  document.getElementById("min-score-filter").addEventListener("input", (e) => {
+    state.minScoreFilter = parseInt(e.target.value, 10) || 0;
+    document.getElementById("min-score-lbl").textContent = `${state.minScoreFilter}%`;
+    updateEarthMapLayers(false);
   });
 
   document.getElementById("chk-show-hotspots").addEventListener("change", (e) => {
     state.showHotspots = e.target.checked;
-    updateEarthMapLayers();
+    updateEarthMapLayers(false);
   });
 
   document.getElementById("tab-hotspots").addEventListener("click", () => {

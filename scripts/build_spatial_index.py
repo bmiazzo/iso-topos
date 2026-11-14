@@ -44,7 +44,7 @@ def main() -> None:
 
     print(
         f"Built spatial index in {out_dir}: "
-        f"{len(sites)} Adaptive H3 cells, {len(EARTH_HOTSPOTS)} hotspots, "
+        f"{len(sites)} Uniform H3 Res 4 cells, {len(EARTH_HOTSPOTS)} hotspots, "
         f"{len(PLANETARY_PRESETS)} Moon/Mars presets."
     )
 

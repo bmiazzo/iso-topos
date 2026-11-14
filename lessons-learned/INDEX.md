@@ -37,3 +37,4 @@ State the concrete check, invariant, or pattern to follow going forward.
 | Date | Lesson | Area / Tags | Summary |
 | :--- | :--- | :--- | :--- |
 | 2026-11-14 | [H3 Polar Cells & Web Mercator ±85.05° Distortion](2026-11-14-h3-polar-mercator-clipping.md) | `etl`, `h3`, `maplibre-globe` | Keep H3 GeoJSON polygons within `|lat| <= 84.95°` and `Δlon <= 90°` to avoid polar distortion in MapLibre v5 globe mode. |
+| 2026-11-14 | [Natural Earth Antarctica Polygon Clamping vs. Vertex Filtering for H3](2026-11-14-natural-earth-antarctica-polar-clamping.md) | `etl`, `h3`, `natural-earth`, `antarctica` | Clamp Natural Earth polar ring vertices to `±84.5°` instead of dropping them so Antarctica's southern closing edge stays intact (`6,200` H3 Res 4 cells). |

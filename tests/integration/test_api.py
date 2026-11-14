@@ -104,3 +104,31 @@ def test_export_endpoint_returns_csv_and_json():
     assert json_resp.status_code == 200
     exported = json_resp.json()
     assert len(exported["results"]) >= 5
+
+
+def test_single_site_inspection_and_raw_parameter_layer_endpoints():
+    """FR-13 & DEC-005: Inspect any H3 cell on the globe and fetch raw parameter layer values."""
+    client = _client()
+    grid_resp = client.get("/api/v1/earth-grid")
+    assert grid_resp.status_code == 200
+    first_cell_id = grid_resp.json()["features"][0]["properties"]["id"]
+
+    param_resp = client.get("/api/v1/earth-grid/parameter/elevation_m")
+    assert param_resp.status_code == 200
+    param_data = param_resp.json()
+    assert first_cell_id in param_data["values"]
+
+    preset = client.post("/api/v1/target/extract", json={"preset_id": "shackleton_rim"}).json()
+    site_resp = client.post(
+        f"/api/v1/site/{first_cell_id}",
+        json={
+            "target": preset,
+            "weights": preset["recommended_weights"],
+            "mode": "clamped",
+        },
+    )
+    assert site_resp.status_code == 200
+    site_breakdown = site_resp.json()
+    assert site_breakdown["site"]["id"] == first_cell_id
+    assert "overall_score" in site_breakdown
+    assert len(site_breakdown["dimension_breakdowns"]) == 5
