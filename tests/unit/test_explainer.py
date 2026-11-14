@@ -81,3 +81,32 @@ def test_mars_caveats_include_co2_radiation_and_sublimation():
     caveat_categories = {c.category for c in res.earth_limit_caveats}
     assert {"gravity", "atmosphere_co2", "radiation", "ice_sublimation"}.issubset(caveat_categories)
     assert len(res.strongest_dimensions) >= 1
+
+
+def test_disabled_parameters_do_not_trigger_envelope_exceeded_caveat():
+    """FR-10 & FR-11: Parameters with weight=0.0 must not appear in envelope_exceeded caveats."""
+    site = EarthSite(
+        id="test_site",
+        name="Test Site",
+        region="Earth",
+        site_type="hotspot",
+        lat=0.0,
+        lon=0.0,
+        parameters=_base_params(),
+    )
+    target = TargetLocation(
+        name="Extreme Target",
+        body=PlanetaryBody.MOON,
+        lat=-89.0,
+        lon=0.0,
+        parameters={**_base_params(), "mean_temp_c": -180.0, "diurnal_amplitude_c": 250.0},
+    )
+    weights = DEFAULT_REGISTRY.default_weights()
+    weights["mean_temp_c"] = 0.0
+    weights["diurnal_amplitude_c"] = 0.0
+
+    engine = AnalogScoringEngine(DEFAULT_REGISTRY)
+    res = engine.evaluate(sites=[site], target=target, weights=weights).ranked_results[0]
+    caveat_categories = {c.category for c in res.earth_limit_caveats}
+    assert "envelope_exceeded" not in caveat_categories
+

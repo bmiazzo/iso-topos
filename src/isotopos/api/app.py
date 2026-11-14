@@ -27,6 +27,8 @@ from isotopos.etl.catalog_data import EARTH_HOTSPOTS, PLANETARY_PRESETS
 from isotopos.etl.interpolator import PlanetaryGridInterpolator
 from isotopos.etl.spatial_builder import build_earth_h3_grid, build_planetary_grid
 from isotopos.scoring.engine import AnalogScoringEngine, PrepackedSiteIndex
+from isotopos.scoring.llm_client import LLMClient, LLMConfigurationError, LLMProviderError
+from isotopos.scoring.mission_weights import evaluate_mission_weights
 
 
 class TargetExtractRequest(BaseModel):
@@ -56,6 +58,12 @@ class SiteInspectRequest(BaseModel):
     target: TargetLocation
     weights: dict[str, float] | None = None
     mode: ScoringMode = ScoringMode.CLAMPED
+
+
+class WeightEvaluateRequest(BaseModel):
+    """Request body for evaluating parameter weights from a textual mission description."""
+
+    mission_description: str = Field(min_length=3, max_length=4000)
 
 
 class DataStore:
@@ -98,7 +106,10 @@ class DataStore:
         self.engine = AnalogScoringEngine(DEFAULT_REGISTRY)
 
 
-def create_app(data_dir: Path | None = None) -> FastAPI:
+def create_app(
+    data_dir: Path | None = None,
+    llm_client: LLMClient | None = None,
+) -> FastAPI:
     """Create and configure the iso-topos FastAPI application."""
     application = FastAPI(
         title="iso-topos API",
@@ -216,6 +227,24 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             mode=req.mode,
         )
         return res.model_dump()
+
+    @application.post("/api/v1/weights/evaluate")
+    def evaluate_weights_from_mission(req: WeightEvaluateRequest) -> dict[str, Any]:
+        try:
+            weights = evaluate_mission_weights(
+                mission_description=req.mission_description,
+                registry=DEFAULT_REGISTRY,
+                prepacked=store.h3_prepacked,
+                engine=store.engine,
+                llm_client=llm_client,
+            )
+            return {"weights": weights}
+        except LLMConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except LLMProviderError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @application.post("/api/v1/export")
     def export_results(

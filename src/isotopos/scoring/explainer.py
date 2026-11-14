@@ -155,7 +155,7 @@ class DivergenceExplainer:
                 )
             )
 
-        out_of_env = [c for c in comparisons if c.out_of_envelope_delta > 0.0]
+        out_of_env = [c for c in comparisons if c.out_of_envelope_delta > 0.0 and c.weight > 0.0]
         if out_of_env:
             details = "; ".join(
                 f"{c.label}: target {c.target_value:.1f} {c.unit} exceeds Earth envelope by {c.out_of_envelope_delta:.1f} {c.unit}"

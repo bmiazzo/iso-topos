@@ -37,62 +37,171 @@
     </div>
   </header>
 
-  <main class="workspace">
+  <main id="workspace" class="workspace">
     <!-- Left Control Dock -->
-    <aside class="panel left-panel">
-      <section class="panel-section">
-        <h2>Target Selection</h2>
-        <label class="field-label" for="preset-select">Curated Mission Preset</label>
-        <select id="preset-select" class="select-input"></select>
-        <p id="preset-context" class="muted-note"></p>
-      </section>
+    <aside id="left-panel" class="panel left-panel no-scrollbar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Mission Controls</span>
+        <button id="btn-collapse-left" class="sidebar-collapse-btn" type="button" title="Collapse Controls Sidebar">◀ Hide</button>
+      </div>
 
-      <section class="panel-section">
-        <div class="section-header-row">
-          <h2>Planetary Map Picker</h2>
-          <span id="extrapolation-badge" class="badge badge-neutral">Preset Exact</span>
-        </div>
-        <div class="planetary-picker-wrap">
-          <canvas id="planetary-picker-canvas" width="300" height="150" title="Click anywhere on Moon or Mars to extract parameters"></canvas>
-          <div class="coord-inputs">
-            <label>Lat (°) <input type="number" id="input-lat" step="0.1" min="-90" max="90" /></label>
-            <label>Lon (°E) <input type="number" id="input-lon" step="0.1" min="-180" max="360" /></label>
-            <button id="btn-extract-coord" class="small-btn">Extract</button>
+      <!-- Level 1: Target Selection (Open by default) -->
+      <section class="collapsible-menu menu-level-1" data-collapse-id="target-selection" data-collapse-default="open">
+        <button type="button" class="collapse-trigger" aria-expanded="true">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span class="collapse-title">Target Selection</span>
+          </span>
+          <span id="summary-target" class="summary-pill pill-accent">Loading…</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner">
+            <label class="field-label" for="preset-select">Curated Mission Preset</label>
+            <select id="preset-select" class="select-input"></select>
+            <p id="preset-context" class="muted-note"></p>
+
+            <!-- Level 2: Planetary Map Picker (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="planetary-picker" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Planetary Map Picker</span>
+                </span>
+                <span id="summary-picker" class="summary-pill pill-neutral">Exact</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div class="section-header-row">
+                    <label class="overlay-check picker-toggle" title="Show or hide pre-listed Moon/Mars mission markers on the planetary map">
+                      <input type="checkbox" id="chk-show-missions" checked />
+                      <span>Show Missions</span>
+                    </label>
+                    <span id="extrapolation-badge" class="badge badge-neutral">Preset Exact</span>
+                  </div>
+                  <div class="planetary-picker-wrap">
+                    <canvas id="planetary-picker-canvas" width="300" height="150" title="Click anywhere on Moon or Mars to extract parameters"></canvas>
+                    <div class="coord-inputs">
+                      <label>Lat (°) <input type="number" id="input-lat" step="0.1" min="-90" max="90" /></label>
+                      <label>Lon (°E) <input type="number" id="input-lon" step="0.1" min="-180" max="360" /></label>
+                      <button id="btn-extract-coord" class="small-btn" type="button">Extract</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </section>
 
-      <!-- Advanced Mode Controls (Hidden in Simple Mode) -->
-      <section id="advanced-controls" class="panel-section hidden">
-        <div class="section-header-row">
-          <h2>Advanced Evaluation</h2>
-          <div class="export-btns">
-            <button id="btn-export-csv" class="small-btn">CSV</button>
-            <button id="btn-export-json" class="small-btn">JSON</button>
+      <!-- Level 1: AI Mission Weight Evaluator (Collapsed by default) -->
+      <section class="collapsible-menu menu-level-1 is-collapsed" data-collapse-id="ai-weights" data-collapse-default="closed">
+        <button type="button" class="collapse-trigger" aria-expanded="false">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span class="collapse-title">AI Mission Weight Evaluator</span>
+          </span>
+          <span id="summary-ai" class="summary-pill pill-neutral">Ready</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner">
+            <label class="field-label" for="mission-description">Mission Description</label>
+            <textarea
+              id="mission-description"
+              class="mission-textarea"
+              rows="3"
+              placeholder="Describe your mission objectives (e.g., 'Lunar south pole ISRU base drilling shallow subsurface ice under grazing sunlight')..."
+            ></textarea>
+            <button id="btn-evaluate-weights" class="action-btn full-width-btn" type="button">
+              Evaluate Weights with AI
+            </button>
+            <p id="weight-eval-status" class="muted-note hidden"></p>
           </div>
         </div>
+      </section>
 
-        <label class="field-label" for="scoring-mode-select">Envelope Mode</label>
-        <select id="scoring-mode-select" class="select-input">
-          <option value="clamped">Terrestrial-Envelope Clamped (Recommended)</option>
-          <option value="strict">Strict Unclamped Physical Distance</option>
-        </select>
+      <!-- Level 1: Advanced Evaluation (Hidden in Simple Mode; Open in Advanced Mode) -->
+      <section id="advanced-controls" class="collapsible-menu menu-level-1 hidden" data-collapse-id="advanced-controls" data-collapse-default="open">
+        <button type="button" class="collapse-trigger" aria-expanded="true">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span class="collapse-title">Advanced Evaluation</span>
+          </span>
+          <span id="summary-advanced" class="summary-pill pill-accent">Active</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner">
+            <!-- Level 2: Scoring Mode & Export (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="adv-scoring" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Scoring Mode &amp; Export</span>
+                </span>
+                <span id="summary-scoring" class="summary-pill pill-accent">Clamped</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <label class="field-label" for="scoring-mode-select">Envelope Mode</label>
+                  <select id="scoring-mode-select" class="select-input">
+                    <option value="clamped">Terrestrial-Envelope Clamped (Recommended)</option>
+                    <option value="strict">Strict Unclamped Physical Distance</option>
+                  </select>
+                  <div class="inline-actions-row">
+                    <span class="field-label" style="margin: 0;">Export Ranked Sites</span>
+                    <div class="export-btns">
+                      <button id="btn-export-csv" class="small-btn" type="button">CSV</button>
+                      <button id="btn-export-json" class="small-btn" type="button">JSON</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
 
-        <div class="filters-box">
-          <h3>Physical Range Filters</h3>
-          <div class="filter-grid">
-            <label>Max Slope (°) <input type="number" id="flt-max-slope" placeholder="Any" step="1" min="0" max="45" /></label>
-            <label>Min Temp (°C) <input type="number" id="flt-min-temp" placeholder="Any" step="5" /></label>
-            <label>Max Temp (°C) <input type="number" id="flt-max-temp" placeholder="Any" step="5" /></label>
-            <label>Min Aridity (0-1) <input type="number" id="flt-min-aridity" placeholder="Any" step="0.1" min="0" max="1" /></label>
+            <!-- Level 2: Physical Range Filters (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="adv-filters" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Physical Range Filters</span>
+                </span>
+                <span id="summary-filters" class="summary-pill pill-neutral">None</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div class="filter-grid">
+                    <label>Max Slope (°) <input type="number" id="flt-max-slope" placeholder="Any" step="1" min="0" max="45" /></label>
+                    <label>Min Temp (°C) <input type="number" id="flt-min-temp" placeholder="Any" step="5" /></label>
+                    <label>Max Temp (°C) <input type="number" id="flt-max-temp" placeholder="Any" step="5" /></label>
+                    <label>Min Aridity (0-1) <input type="number" id="flt-min-aridity" placeholder="Any" step="0.1" min="0" max="1" /></label>
+                  </div>
+                  <div class="inline-actions-row">
+                    <span class="muted-note" style="margin: 0;">Filters apply live across H3 &amp; hotspots</span>
+                    <button id="btn-reset-filters" class="small-btn" type="button">Reset</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Level 2: Parameter Weights & Overrides (Open; holds Level-3 Dimension Groups) -->
+            <section class="collapsible-menu menu-level-2" data-collapse-id="adv-weights" data-collapse-default="open">
+              <button type="button" class="collapse-trigger" aria-expanded="true">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Parameter Weights &amp; Overrides</span>
+                </span>
+                <span id="summary-weights" class="summary-pill pill-ok">17/17 active</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div id="all-zero-warning" class="alert-warn hidden">
+                    All parameter weights are 0%. Enable at least one parameter to compute rankings.
+                  </div>
+                  <div id="parameter-weights-container"></div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
-
-        <div id="all-zero-warning" class="alert-warn hidden">
-          All parameter weights are 0%. Enable at least one parameter to compute rankings.
-        </div>
-
-        <div id="parameter-weights-container"></div>
       </section>
     </aside>
 
@@ -101,122 +210,233 @@
       <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
       <div id="earth-map"></div>
 
-      <!-- Floating Layer & Visual Switcher -->
-      <div class="map-overlay-card top-left-overlay">
-        <div class="overlay-row">
-          <label for="layer-variable-select">Globe Color Layer:</label>
-          <select id="layer-variable-select" class="select-input compact"></select>
-        </div>
-        <div class="overlay-row">
-          <label for="palette-select">Scientific Color Palette:</label>
-          <select id="palette-select" class="select-input compact">
-            <option value="bioluminescent">Bioluminescent Cyan-Gold</option>
-            <option value="viridis">Viridis (Colorblind-Safe)</option>
-            <option value="magma">Magma (Thermal Glow)</option>
-            <option value="plasma">Plasma (Solar / UV)</option>
-            <option value="turbo">Turbo (High-Contrast Spectrum)</option>
-          </select>
-        </div>
-        <div class="overlay-row">
-          <label for="basemap-select">Satellite Imagery:</label>
-          <select id="basemap-select" class="select-input compact">
-            <option value="gibs_bluemarble">NASA GIBS Blue Marble</option>
-            <option value="gibs_modis">NASA GIBS MODIS Terra True Color</option>
-            <option value="dark_vector">Dark Scientific Base</option>
-          </select>
-        </div>
-        <div class="overlay-row">
-          <div class="slider-label-row">
-            <label for="hex-opacity">Hex Opacity (Score-Dynamic):</label>
-            <span id="hex-opacity-lbl">82%</span>
+      <!-- Top-Left Zero-Overlap Floating Stack -->
+      <div class="map-top-left-stack">
+        <button id="btn-expand-left" class="floating-expand-pill hidden" type="button" title="Show Mission Controls">
+          ▶ Controls
+        </button>
+
+        <!-- Floating Layer & Visual Switcher (Collapsed by default) -->
+        <section class="map-overlay-card top-left-overlay collapsible-menu is-collapsed" data-collapse-id="globe-layers" data-collapse-default="closed">
+          <button type="button" class="collapse-trigger" aria-expanded="false">
+            <span class="collapse-title-wrap">
+              <span class="chevron">▾</span>
+              <span class="collapse-title">Globe Layers</span>
+            </span>
+            <span id="summary-layers" class="summary-pill pill-accent">Overall • Biolum</span>
+          </button>
+          <div class="collapse-body">
+            <div class="collapse-inner overlay-body-stack">
+              <div class="overlay-row">
+                <label for="layer-variable-select">Globe Color Layer:</label>
+                <select id="layer-variable-select" class="select-input compact"></select>
+              </div>
+              <div class="overlay-row">
+                <label for="palette-select">Scientific Color Palette:</label>
+                <select id="palette-select" class="select-input compact">
+                  <option value="bioluminescent">Bioluminescent Indigo-Gold</option>
+                  <option value="viridis">Viridis (Colorblind-Safe)</option>
+                  <option value="magma">Magma (Thermal Glow)</option>
+                  <option value="plasma">Plasma (Solar / UV)</option>
+                  <option value="turbo">Turbo (High-Contrast Spectrum)</option>
+                </select>
+              </div>
+              <div class="overlay-row">
+                <label for="scale-mode-select">Color Scale Range:</label>
+                <select id="scale-mode-select" class="select-input compact">
+                  <option value="auto">Auto-Contrast (Data Min–Max)</option>
+                  <option value="fixed">Absolute Fixed Scale (0–100%)</option>
+                </select>
+              </div>
+              <div class="overlay-row">
+                <label for="basemap-select">Satellite Imagery:</label>
+                <select id="basemap-select" class="select-input compact">
+                  <option value="gibs_bluemarble">NASA GIBS Blue Marble</option>
+                  <option value="gibs_modis">NASA GIBS MODIS Terra True Color</option>
+                  <option value="dark_vector">Dark Scientific Base</option>
+                </select>
+              </div>
+              <div class="overlay-row">
+                <div class="slider-label-row">
+                  <label for="hex-opacity">Hex Opacity (Score-Dynamic):</label>
+                  <span id="hex-opacity-lbl">82%</span>
+                </div>
+                <input type="range" id="hex-opacity" min="0.20" max="0.98" step="0.02" value="0.82" />
+              </div>
+              <div class="overlay-row">
+                <div class="slider-label-row">
+                  <label for="min-score-filter">Min Score Spotlight:</label>
+                  <span id="min-score-lbl">0%</span>
+                </div>
+                <input type="range" id="min-score-filter" min="0" max="95" step="5" value="0" />
+              </div>
+              <label class="overlay-check">
+                <input type="checkbox" id="chk-show-hotspots" checked />
+                <span>Show Local Hotspot Overlays (26)</span>
+              </label>
+            </div>
           </div>
-          <input type="range" id="hex-opacity" min="0.20" max="0.98" step="0.02" value="0.82" />
-        </div>
-        <div class="overlay-row">
-          <div class="slider-label-row">
-            <label for="min-score-filter">Min Score Spotlight:</label>
-            <span id="min-score-lbl">0%</span>
-          </div>
-          <input type="range" id="min-score-filter" min="0" max="85" step="5" value="0" />
-        </div>
-        <label class="overlay-check">
-          <input type="checkbox" id="chk-show-hotspots" checked />
-          <span>Show Local Hotspot Overlays (26)</span>
-        </label>
+        </section>
       </div>
 
-      <!-- Dynamic Color Legend -->
-      <div class="map-overlay-card bottom-left-overlay">
-        <div id="legend-title" class="legend-title">Overall Similarity (%)</div>
-        <div id="legend-gradient-bar" class="viridis-bar"></div>
-        <div class="legend-ticks">
-          <span id="legend-min">0%</span>
-          <span id="legend-mid">50%</span>
-          <span id="legend-max">100%</span>
+      <!-- Top-Right Reopen Pill (Clears MapLibre NavigationControl) -->
+      <button id="btn-expand-right" class="floating-expand-pill right-expand-pill hidden" type="button" title="Show Analog Results">
+        Analogs ◀
+      </button>
+
+      <!-- Dynamic Color Legend (Open by default, collapsible) -->
+      <section class="map-overlay-card bottom-left-overlay collapsible-menu" data-collapse-id="globe-legend" data-collapse-default="open">
+        <button type="button" class="collapse-trigger" aria-expanded="true">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span id="legend-title" class="collapse-title">Overall Similarity (%)</span>
+          </span>
+          <span id="summary-legend" class="summary-pill pill-neutral">0%–100%</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner overlay-body-stack">
+            <div id="legend-gradient-bar" class="viridis-bar"></div>
+            <div class="legend-ticks">
+              <span id="legend-min">0%</span>
+              <span id="legend-mid">50%</span>
+              <span id="legend-max">100%</span>
+            </div>
+            <div class="hotspot-legend">
+              <span><i class="dot dot-novel"></i> Novel Hotspot</span>
+              <span><i class="dot dot-baseline"></i> Well-Known Baseline</span>
+            </div>
+          </div>
         </div>
-        <div class="hotspot-legend">
-          <span><i class="dot dot-novel"></i> Novel Hotspot</span>
-          <span><i class="dot dot-baseline"></i> Well-Known Baseline</span>
-        </div>
-      </div>
+      </section>
 
       <div id="hover-tooltip" class="hover-tooltip hidden"></div>
     </section>
 
     <!-- Right Breakdown & Rankings Drawer -->
-    <aside class="panel right-panel">
-      <section class="panel-section">
-        <div class="section-header-row">
-          <h2>Ranked Earth Analogs</h2>
-          <span id="eval-timing" class="muted-note"></span>
+    <aside id="right-panel" class="panel right-panel no-scrollbar">
+      <div class="sidebar-header">
+        <button id="btn-collapse-right" class="sidebar-collapse-btn" type="button" title="Collapse Results Sidebar">Hide ▶</button>
+        <span class="sidebar-title">Analog Results</span>
+      </div>
+
+      <!-- Level 1: Ranked Earth Analogs (Open by default) -->
+      <section class="collapsible-menu menu-level-1" data-collapse-id="ranked-analogs" data-collapse-default="open">
+        <button type="button" class="collapse-trigger" aria-expanded="true">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span class="collapse-title">Ranked Earth Analogs</span>
+          </span>
+          <span id="eval-timing" class="summary-pill pill-neutral">—</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner">
+            <div class="segmented small-seg">
+              <button id="tab-hotspots" class="seg-btn active" type="button">Local Hotspots</button>
+              <button id="tab-h3" class="seg-btn" type="button">Top H3 Regions</button>
+            </div>
+            <div id="ranked-list" class="ranked-list no-scrollbar"></div>
+          </div>
         </div>
-        <div class="segmented small-seg">
-          <button id="tab-hotspots" class="seg-btn active">Local Hotspots</button>
-          <button id="tab-h3" class="seg-btn">Top H3 Regions</button>
-        </div>
-        <div id="ranked-list" class="ranked-list"></div>
       </section>
 
-      <section id="breakdown-card" class="panel-section hidden">
-        <div class="section-header-row">
-          <div>
-            <h2 id="detail-name">Site Name</h2>
-            <p id="detail-meta" class="muted-note"></p>
-          </div>
-          <div id="detail-score-badge" class="score-pill">0%</div>
-        </div>
+      <!-- Level 1: Site Breakdown (Open by default when a site is selected) -->
+      <section id="breakdown-card" class="collapsible-menu menu-level-1 hidden" data-collapse-id="site-breakdown" data-collapse-default="open">
+        <button type="button" class="collapse-trigger" aria-expanded="true">
+          <span class="collapse-title-wrap">
+            <span class="chevron">▾</span>
+            <span class="collapse-title">Site Breakdown</span>
+          </span>
+          <span id="detail-score-badge" class="score-pill">0%</span>
+        </button>
+        <div class="collapse-body">
+          <div class="collapse-inner">
+            <div class="detail-summary-top">
+              <div>
+                <h2 id="detail-name" class="detail-site-title">Site Name</h2>
+                <p id="detail-meta" class="muted-note"></p>
+              </div>
+            </div>
 
-        <p id="detail-notes" class="detail-notes"></p>
+            <p id="detail-notes" class="detail-notes"></p>
 
-        <div class="chart-wrap">
-          <canvas id="dimension-chart"></canvas>
-        </div>
+            <!-- Level 2: Dimension Similarity Chart (Open by default) -->
+            <section class="collapsible-menu menu-level-2" data-collapse-id="detail-chart" data-collapse-default="open">
+              <button type="button" class="collapse-trigger" aria-expanded="true">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Dimension Similarity</span>
+                </span>
+                <span class="summary-pill pill-accent">Chart</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div class="chart-wrap">
+                    <canvas id="dimension-chart"></canvas>
+                  </div>
+                </div>
+              </div>
+            </section>
 
-        <div class="breakdown-block">
-          <h3>Exploration & Testing Relevance</h3>
-          <ul id="detail-relevance" class="tag-list"></ul>
-        </div>
+            <!-- Level 2: Exploration & Testing Relevance (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-relevance" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Exploration &amp; Testing Relevance</span>
+                </span>
+                <span id="summary-relevance" class="summary-pill pill-accent">0 tags</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <ul id="detail-relevance" class="tag-list"></ul>
+                </div>
+              </div>
+            </section>
 
-        <div class="breakdown-block">
-          <h3>Earth-Limit Caveats</h3>
-          <div id="detail-caveats" class="caveat-list"></div>
-        </div>
+            <!-- Level 2: Earth-Limit Caveats (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-caveats" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Earth-Limit Caveats</span>
+                </span>
+                <span id="summary-caveats" class="summary-pill pill-warn">0 caveats</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div id="detail-caveats" class="caveat-list"></div>
+                </div>
+              </div>
+            </section>
 
-        <div class="breakdown-block">
-          <h3>Unit-Level Comparison & Provenance (DR-3)</h3>
-          <div class="table-scroll">
-            <table class="prov-table">
-              <thead>
-                <tr>
-                  <th>Parameter</th>
-                  <th>Earth</th>
-                  <th>Target</th>
-                  <th>Sim</th>
-                  <th>Sources</th>
-                </tr>
-              </thead>
-              <tbody id="detail-comparison-body"></tbody>
-            </table>
+            <!-- Level 2: Unit-Level Comparison & Provenance (Collapsed by default) -->
+            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-provenance" data-collapse-default="closed">
+              <button type="button" class="collapse-trigger" aria-expanded="false">
+                <span class="collapse-title-wrap">
+                  <span class="chevron">▾</span>
+                  <span class="collapse-title">Unit-Level Comparison &amp; Provenance (DR-3)</span>
+                </span>
+                <span id="summary-provenance" class="summary-pill pill-neutral">17 params</span>
+              </button>
+              <div class="collapse-body">
+                <div class="collapse-inner">
+                  <div class="table-scroll no-scrollbar">
+                    <table class="prov-table">
+                      <thead>
+                        <tr>
+                          <th>Parameter</th>
+                          <th>Earth</th>
+                          <th>Target</th>
+                          <th>Sim</th>
+                          <th>Sources</th>
+                        </tr>
+                      </thead>
+                      <tbody id="detail-comparison-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </section>

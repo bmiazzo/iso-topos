@@ -17,13 +17,14 @@ from isotopos.scoring.engine import AnalogScoringEngine
 
 
 def test_grazing_sun_hours_increases_at_polar_latitudes():
-    """parameters.md: Arctic Circle (~66.5N) & polar latitudes have far more 0-5 deg grazing sun hours than tropics."""
+    """parameters.md: Grazing sun hours increase monotonically from equator to Arctic Circle to High Arctic."""
     equator = compute_grazing_sun_hours(0.0)
     greenland = compute_grazing_sun_hours(66.5)
     high_arctic = compute_grazing_sun_hours(78.0)
     assert equator < 400.0
-    assert greenland > equator * 2.0
-    assert high_arctic > equator * 1.5
+    assert greenland > 1100.0
+    assert high_arctic > greenland
+
 
 
 def test_catalogs_have_12_presets_and_26_hotspots_all_valid():
@@ -176,3 +177,75 @@ def test_scientific_sanity_lunar_south_pole_and_mars_astrobiology_rankings():
     )
     top_mars_ids = {r.site.id for r in mars_res.ranked_results}
     assert "lake_salda" in top_mars_ids or "pilbara_shark_bay" in top_mars_ids
+
+
+def test_earth_parameter_synthesis_has_no_rectangular_discontinuities():
+    """Earth grid synthesis must vary smoothly across former lat/lon box boundaries (no rectangular clusters)."""
+    from isotopos.etl.spatial_builder import _synthesize_earth_cell_parameters
+
+    boundary_pairs = [
+        ((15.9, 10.0), (16.1, 10.0)),      # Former Sahara/arid belt edge
+        ((66.0, -42.1), (66.0, -41.9)),    # Former West Greenland anorthosite box
+        ((23.9, 76.0), (24.1, 76.0)),      # Former Deccan basalt box
+        ((26.9, 88.0), (27.1, 88.0)),      # Former Tibetan Plateau box
+        ((64.9, 90.0), (65.1, 90.0)),      # Former polar cutoff
+        ((53.9, 105.0), (54.1, 105.0)),    # Former permafrost cutoff
+    ]
+    for (lat1, lon1), (lat2, lon2) in boundary_pairs:
+        p1 = _synthesize_earth_cell_parameters(lat1, lon1)
+        p2 = _synthesize_earth_cell_parameters(lat2, lon2)
+        assert abs(p2["elevation_m"] - p1["elevation_m"]) < 400.0
+        assert abs(p2["mean_temp_c"] - p1["mean_temp_c"]) < 3.5
+        assert abs(p2["diurnal_amplitude_c"] - p1["diurnal_amplitude_c"]) < 3.0
+        assert abs(p2["aridity_dryness_index"] - p1["aridity_dryness_index"]) < 0.12
+        assert abs(p2["anorthosite_highland_score"] - p1["anorthosite_highland_score"]) < 0.12
+        assert abs(p2["basalt_volcanic_score"] - p1["basalt_volcanic_score"]) < 0.12
+        assert abs(p2["clay_carbonate_sediment_score"] - p1["clay_carbonate_sediment_score"]) < 0.12
+        assert abs(p2["biosignature_preservation_score"] - p1["biosignature_preservation_score"]) < 0.12
+
+
+def test_planetary_parameter_synthesis_has_no_rectangular_discontinuities():
+    """Moon and Mars parameter fields must transition smoothly without sharp lat/lon box edges."""
+    from isotopos.etl.spatial_builder import _synthesize_planetary_point
+
+    moon_edge = (_synthesize_planetary_point(PlanetaryBody.MOON, 44.5, 20.0),
+                 _synthesize_planetary_point(PlanetaryBody.MOON, 45.5, 20.0))
+    assert abs(moon_edge[1]["anorthosite_highland_score"] - moon_edge[0]["anorthosite_highland_score"]) < 0.15
+    assert abs(moon_edge[1]["basalt_volcanic_score"] - moon_edge[0]["basalt_volcanic_score"]) < 0.15
+    assert abs(moon_edge[1]["elevation_m"] - moon_edge[0]["elevation_m"]) < 600.0
+
+    mars_edge = (_synthesize_planetary_point(PlanetaryBody.MARS, 24.5, 245.0),
+                 _synthesize_planetary_point(PlanetaryBody.MARS, 25.5, 245.0))
+    assert abs(mars_edge[1]["elevation_m"] - mars_edge[0]["elevation_m"]) < 1200.0
+    assert abs(mars_edge[1]["clay_carbonate_sediment_score"] - mars_edge[0]["clay_carbonate_sediment_score"]) < 0.15
+
+
+def test_h3_grid_marks_well_known_baseline_vicinity():
+    """FR-6: H3 cells overlapping well-known baseline regions are flagged is_well_known=True."""
+    import h3
+
+    sites, _ = build_earth_h3_grid(max_cells=None, res=4)
+    by_id = {s.id: s for s in sites}
+    atacama_cid = h3.latlng_to_cell(-24.08, -69.92, 4)
+    assert by_id[atacama_cid].is_well_known is True
+    # Greenland White Mountain is explicitly novel (is_well_known=False)
+    greenland_cid = h3.latlng_to_cell(66.52, -52.45, 4)
+    assert by_id[greenland_cid].is_well_known is False
+
+
+def test_planetary_and_earth_anchor_blending_is_order_independent_and_preserves_shackleton():
+    """Shackleton Rim (-89.9, 0.0) must not be overwritten by nearby Malapert Massif (-86.0, 0.0)."""
+    from isotopos.etl.spatial_builder import _synthesize_earth_cell_parameters, _synthesize_planetary_point
+
+    shackleton = next(p for p in PLANETARY_PRESETS if p.id == "shackleton_rim")
+    synth_shackleton = _synthesize_planetary_point(PlanetaryBody.MOON, shackleton.lat, shackleton.lon)
+    # Shackleton elevation is 1300m, slope is 24 deg (Malapert is 5000m, Mons Mouton is 6.5 deg)
+    assert abs(synth_shackleton["elevation_m"] - shackleton.parameters["elevation_m"]) < 350.0
+    assert abs(synth_shackleton["slope_deg"] - shackleton.parameters["slope_deg"]) < 3.0
+
+    # Earth hotspot H3 synthesis must also blend low_sun_grazing_hours
+    mcmurdo = next(h for h in EARTH_HOTSPOTS if h.id == "mcmurdo_dry_valleys")
+    synth_mcmurdo = _synthesize_earth_cell_parameters(mcmurdo.lat, mcmurdo.lon)
+    assert abs(synth_mcmurdo["low_sun_grazing_hours"] - mcmurdo.parameters["low_sun_grazing_hours"]) < 150.0
+
+

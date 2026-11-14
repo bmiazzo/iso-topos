@@ -132,3 +132,80 @@ def test_single_site_inspection_and_raw_parameter_layer_endpoints():
     assert site_breakdown["site"]["id"] == first_cell_id
     assert "overall_score" in site_breakdown
     assert len(site_breakdown["dimension_breakdowns"]) == 5
+
+
+def test_weights_evaluate_endpoint_returns_17_weights_from_mission_description():
+    """POST /api/v1/weights/evaluate takes mission_description and returns 17 parameter weights."""
+    from isotopos.core.registry import DEFAULT_REGISTRY
+
+    fake_weights = {p.id: 0.75 for p in DEFAULT_REGISTRY.parameters}
+    fake_weights["biosignature_preservation_score"] = 0.0
+
+    class FakeLLMClient:
+        def generate_weights_json(self, system_prompt: str, user_prompt: str, json_schema: dict) -> dict:
+            assert "def score_tile_scalar" in system_prompt
+            assert "Lunar south pole" in user_prompt
+            return fake_weights
+
+    client = TestClient(create_app(llm_client=FakeLLMClient()))
+    resp = client.post(
+        "/api/v1/weights/evaluate",
+        json={"mission_description": "Lunar south pole base extracting subsurface ice in cold traps."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "weights" in data
+    assert len(data["weights"]) == 17
+    assert data["weights"]["subsurface_ice_permafrost"] == 0.75
+    assert data["weights"]["biosignature_preservation_score"] == 0.0
+
+
+def test_weights_evaluate_endpoint_returns_503_when_no_api_key_configured(monkeypatch):
+    """POST /api/v1/weights/evaluate returns a clear 503 error when no AI API key is configured."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+
+    client = _client()
+    resp = client.post(
+        "/api/v1/weights/evaluate",
+        json={"mission_description": "Mars astrobiology rover drilling clay sediments."},
+    )
+    assert resp.status_code == 503
+    assert "API key" in resp.json()["detail"]
+
+
+def test_frontend_static_modules_and_collapsible_shell_served():
+    """Verify index.html and all modular CSS/ES module static files are served with HTTP 200."""
+    import re
+
+    client = _client()
+    index_resp = client.get("/")
+    assert index_resp.status_code == 200
+    html = index_resp.text
+    assert 'data-collapse-id="target-selection"' in html
+    assert 'data-collapse-id="planetary-picker"' in html
+    assert 'no-scrollbar' in html
+
+    css_resp = client.get("/static/styles.css")
+    assert css_resp.status_code == 200
+    for imp in re.findall(r'@import\s+url\("([^"]+)"\)', css_resp.text):
+        asset_path = "/static/" + imp.lstrip("./")
+        assert client.get(asset_path).status_code == 200, asset_path
+
+    js_routes = [
+        "/static/app.js",
+        "/static/js/state.js",
+        "/static/js/api.js",
+        "/static/js/ui/collapsible.js",
+        "/static/js/ui/menu_summaries.js",
+        "/static/js/components/globe_map.js",
+        "/static/js/components/planetary_picker.js",
+        "/static/js/components/advanced_panel.js",
+        "/static/js/components/breakdown_panel.js",
+        "/static/js/components/ai_weights.js",
+    ]
+    for route in js_routes:
+        assert client.get(route).status_code == 200, route
+
+

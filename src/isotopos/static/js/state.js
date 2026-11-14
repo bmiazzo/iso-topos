@@ -1,0 +1,76 @@
+// Central reactive application state and visualization constants
+
+export const COLLAPSE_STORAGE_KEY = "isotopos.ui.collapse.v1";
+
+export const PALETTES = {
+  bioluminescent: [
+    [0.0, "#172554"],
+    [0.25, "#0369a1"],
+    [0.5, "#06b6d4"],
+    [0.74, "#22c55e"],
+    [0.9, "#eab308"],
+    [1.0, "#fef08a"],
+  ],
+  viridis: [
+    [0.0, "#440154"],
+    [0.25, "#3b528b"],
+    [0.5, "#21918c"],
+    [0.75, "#5ec962"],
+    [1.0, "#fde725"],
+  ],
+  magma: [
+    [0.0, "#140b34"],
+    [0.3, "#51127c"],
+    [0.6, "#b73779"],
+    [0.82, "#fc8961"],
+    [1.0, "#fcfdbf"],
+  ],
+  plasma: [
+    [0.0, "#0d0887"],
+    [0.3, "#6a00a8"],
+    [0.6, "#b12a90"],
+    [0.82, "#e16462"],
+    [1.0, "#f0f921"],
+  ],
+  turbo: [
+    [0.0, "#30123b"],
+    [0.25, "#28bbec"],
+    [0.5, "#a2fc3c"],
+    [0.75, "#fb8022"],
+    [1.0, "#7a0403"],
+  ],
+};
+
+export const state = {
+  metadata: null,
+  earthGeojson: null,
+  rawParamCache: {},
+  cellDisplayValues: {},
+  body: "moon",
+  mode: "simple",
+  scoringMode: "clamped",
+  excludeWellKnown: false,
+  showHotspots: true,
+  showMissions: true,
+  isGlobe: true,
+  autoSpin: true,
+  userInteracting: false,
+  activeTab: "hotspots",
+  activeLayer: "overall_score",
+  palette: "bioluminescent",
+  scaleMode: "auto",
+  basemap: "gibs_bluemarble",
+  hexOpacity: 0.82,
+  minScoreFilter: 0,
+  target: null,
+  activePresetId: null,
+  weights: {},
+  lastRankResponse: null,
+  selectedSiteId: null,
+  map: null,
+  mapReady: false,
+  renderSeq: 0,
+  chart: null,
+  rankDebounce: null,
+  aiWeightStatus: "Ready",
+};
