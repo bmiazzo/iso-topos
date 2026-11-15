@@ -4,6 +4,7 @@ import { fetchRawParameter } from "../api.js";
 import { PALETTES, state } from "../state.js";
 import { escapeHtml, setSpinButtonState } from "../ui/dom.js";
 import {
+  bindCesiumCameraInteraction,
   cameraHeightToApproxZoom,
   createAutoSpinController,
   createCesiumViewer,
@@ -305,6 +306,7 @@ export function flyToSiteOnGlobe(lon, lat, zoom = 3.4, pauseSpin = true) {
 export function setEarthProjection(isGlobe) {
   state.isGlobe = Boolean(isGlobe);
   setViewerProjection(_viewer, state.isGlobe);
+  syncOutlineVisibilityFromZoom();
   requestAutoSpinFrame();
 }
 
@@ -594,8 +596,6 @@ export function initEarthMap({ onInspectSite }) {
   const mapContainer = document.getElementById("earth-map");
   const mapCanvas = viewer.scene.canvas;
 
-  let hoverRafId = 0;
-  let pendingHoverPos = null;
   let lastHoverKey = "";
   let lastCursor = "";
   let cachedTipW = 210;
@@ -611,11 +611,6 @@ export function initEarthMap({ onInspectSite }) {
   };
 
   const hideTooltip = () => {
-    pendingHoverPos = null;
-    if (hoverRafId) {
-      cancelAnimationFrame(hoverRafId);
-      hoverRafId = 0;
-    }
     setCursor("");
     if (lastHoverKey !== "") {
       lastHoverKey = "";
@@ -637,12 +632,7 @@ export function initEarthMap({ onInspectSite }) {
     positionTooltipWithinStage(tooltip, cachedStageW, cachedStageH, cachedTipW, cachedTipH, point);
   };
 
-  const processHoverFrame = () => {
-    hoverRafId = 0;
-    const pos = pendingHoverPos;
-    pendingHoverPos = null;
-    if (!pos || state.pointerDown) return;
-
+  const processHoverFrame = (pos) => {
     const picked = viewer.scene.pick(pos);
     if (picked?.id?.kind === "hotspot") {
       const p = picked.id.props;
@@ -722,82 +712,53 @@ export function initEarthMap({ onInspectSite }) {
     showTooltip(key, html, pos, "pointer");
   };
 
-  const handler = new Cesium.ScreenSpaceEventHandler(mapCanvas);
-  handler.setInputAction(() => {
-    state.pointerDown = true;
-    state.userInteracting = true;
-    clearTimeout(state.flyToTimer);
-    viewer.camera.cancelFlight?.();
-    hideTooltip();
-  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
-
-  handler.setInputAction(() => {
-    state.pointerDown = false;
-    state.userInteracting = false;
-    requestAutoSpinFrame();
-  }, Cesium.ScreenSpaceEventType.LEFT_UP);
-
-  handler.setInputAction(() => {
-    state.pointerDown = true;
-    state.userInteracting = true;
-    clearTimeout(state.flyToTimer);
-    viewer.camera.cancelFlight?.();
-    hideTooltip();
-  }, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
-
-  handler.setInputAction(() => {
-    state.pointerDown = false;
-    state.userInteracting = false;
-    requestAutoSpinFrame();
-  }, Cesium.ScreenSpaceEventType.RIGHT_UP);
-
-  handler.setInputAction(() => {
-    state.userInteracting = true;
-    clearTimeout(state.flyToTimer);
-    viewer.camera.cancelFlight?.();
-    hideTooltip();
-    clearTimeout(viewer._wheelTimeout);
-    viewer._wheelTimeout = setTimeout(() => {
-      if (!state.pointerDown) {
-        state.userInteracting = false;
-        requestAutoSpinFrame();
-      }
-    }, 2200);
-  }, Cesium.ScreenSpaceEventType.WHEEL);
-
-  handler.setInputAction((movement) => {
-    if (state.pointerDown) {
+  bindCesiumCameraInteraction(viewer, {
+    onPointerDown: () => {
+      state.pointerDown = true;
+      state.userInteracting = true;
+      clearTimeout(state.flyToTimer);
       hideTooltip();
-      return;
-    }
-    pendingHoverPos = Cesium.Cartesian2.clone(movement.endPosition, pendingHoverPos);
-    if (!hoverRafId) {
-      hoverRafId = requestAnimationFrame(processHoverFrame);
-    }
-  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
-
-  handler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position);
-    if (picked?.id?.kind === "hotspot" || picked?.id?.kind === "top_h3") {
-      onInspectSite(picked.id.props.id);
-      return;
-    }
-    const coords = pickGlobeLatLon(viewer, click.position);
-    let cellId = null;
-    if (coords && typeof window !== "undefined" && window.h3?.latLngToCell) {
-      const candidate = window.h3.latLngToCell(coords.lat, normalizeLon180(coords.lon), 4);
-      if (getSitePropsById().has(candidate)) {
-        cellId = candidate;
+    },
+    onPointerUp: () => {
+      state.pointerDown = false;
+      state.userInteracting = false;
+      requestAutoSpinFrame();
+    },
+    onWheelStart: () => {
+      state.userInteracting = true;
+      clearTimeout(state.flyToTimer);
+      hideTooltip();
+    },
+    onWheelIdle: () => {
+      state.userInteracting = false;
+      requestAutoSpinFrame();
+    },
+    onHoverFrame: processHoverFrame,
+    onHoverClear: hideTooltip,
+    onClick: (pos) => {
+      const picked = viewer.scene.pick(pos);
+      if (picked?.id?.kind === "hotspot" || picked?.id?.kind === "top_h3") {
+        onInspectSite(picked.id.props.id);
+        return;
       }
-    } else if (typeof picked?.id === "string") {
-      cellId = picked.id.split("#")[0];
-    }
-    if (!cellId) return;
-    const val = state.cellDisplayValues[cellId] ?? -999999;
-    if (val > -99999) {
-      onInspectSite(cellId);
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      const coords = pickGlobeLatLon(viewer, pos);
+      let cellId = null;
+      if (coords && typeof window !== "undefined" && window.h3?.latLngToCell) {
+        const candidate = window.h3.latLngToCell(coords.lat, normalizeLon180(coords.lon), 4);
+        if (getSitePropsById().has(candidate)) {
+          cellId = candidate;
+        }
+      } else if (typeof picked?.id === "string") {
+        cellId = picked.id.split("#")[0];
+      }
+      if (!cellId) return;
+      const val = state.cellDisplayValues[cellId] ?? -999999;
+      if (val > -99999) {
+        onInspectSite(cellId);
+      }
+    },
+    wheelIdleMs: 2200,
+  });
 
   mapCanvas.addEventListener("mouseleave", hideTooltip);
   window.addEventListener("resize", () => {

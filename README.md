@@ -16,10 +16,10 @@ Rather than treating terrestrial analogs as black-box similarity scores or purel
 
 - **Planetary → Earth Analog Search (`FR-1`–`FR-3b`):**
   - **12 Curated Moon & Mars Target Presets:** *Shackleton Crater Rim*, *Mons Mouton Plateau*, *Malapert Massif*, *Aristarchus Plateau*, *Mare Tranquillitatis Skylight Pit*, *Reiner Gamma Swirl*; *Arcadia Planitia*, *Jezero Crater Delta*, *Oxia Planum*, *Mawrth Vallis*, *Gale Crater*, and *Arsia Mons Flank Pit Caves*.
-  - **Interactive 2D Planetary Map Picker & Arbitrary `(lat, lon)` Extraction:** Click anywhere on the Moon or Mars to bilinearly interpolate planetary parameters with transparent extrapolation flags.
+  - **Dedicated 3D Planetary Explorer (`/planetary`):** Interactive CesiumJS 3D Moon & Mars globes (NASA Trek WMTS `LRO_LOLA_Shade_Global_128ppd_v04` polar-complete shaded relief, `LRO_WAC_Mosaic`, & Mars *Viking MDIM2.1*) with selectable basemaps, gridded parameter overlays, and arbitrary `(lat, lon)` bilinear extraction.
 - **Multi-Scale 3D Globe Discovery (`FR-4`–`FR-6`, `DR-1a`):**
-  - **MapLibre GL JS 3D Globe** (with 2D map toggle) rendering **8,636 Adaptive H3 Land Hexagons** and **26 Curated Local Hotspots** (including *White Mountain / Qaqortorsuaq* in Greenland, *Grotta del Gelo* on Mt. Etna, *Mistastin Crater*, *Lofoten*, *Batagaika*, *Lake Salda*, *Pilbara / Shark Bay*, and *Svalbard*).
-  - **Multi-Layer Switcher:** Color the globe by Overall Similarity, any Dimension Sub-Score, or any of the 17 Raw Physical Parameters, layered over **NASA GIBS** satellite imagery (*Blue Marble* / *MODIS Terra True Color*).
+  - **CesiumJS 3D Earth Globe** (with 2D map toggle) rendering **89,022 Uniform H3 Resolution-4 Land Hexagons** and **26 Curated Local Hotspots** (including *White Mountain / Qaqortorsuaq* in Greenland, *Grotta del Gelo* on Mt. Etna, *Mistastin Crater*, *Lofoten*, *Batagaika*, *Lake Salda*, *Pilbara / Shark Bay*, and *Svalbard*).
+  - **Multi-Layer Switcher:** Color the globe by Overall Similarity, any Dimension Sub-Score, or any of the 17 Raw Physical Parameters, layered over **NASA GIBS** satellite imagery (*Blue Marble Next Generation* / *MODIS Terra True Color*).
   - **"Beyond Well-Known Sites" Filter:** Hide or dim classic baselines (Atacama, McMurdo, Haughton, Mauna Loa, Askja, Rio Tinto) to surface under-studied analogs.
 - **Dual-Mode Scientist UI (`FR-13`–`FR-15`):**
   - **Simple Mode:** Preset/coordinate selector, 3D Earth Globe, and Site Breakdown Card (Dimension bar chart, Earth-limit caveats, and exploration relevance).
@@ -61,7 +61,7 @@ iso-topos/
 ├── src/isotopos/
 │   ├── core/          # Declarative ParameterRegistry, models & DR-3 provenance
 │   ├── scoring/       # Vectorized NumPy AnalogScoringEngine & DivergenceExplainer
-│   ├── etl/           # Adaptive H3 builder, Moon/Mars grids, interpolator & catalogs
+│   ├── etl/           # Uniform H3 Res-4 builder, Moon/Mars grids, interpolator & catalogs
 │   ├── api/           # FastAPI REST endpoints & CSV/JSON export
 │   └── static/        # Zero-build ES Module 3D Globe Scientist UI
 ├── scripts/           # Offline ETL generator (build_spatial_index.py)

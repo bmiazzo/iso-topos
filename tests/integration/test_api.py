@@ -440,4 +440,33 @@ def test_rank_gzip_uses_fast_compression_and_stays_under_budget():
     assert elapsed_ms < 250.0, f"Gzipped /api/v1/rank took {elapsed_ms:.1f} ms"
 
 
+def test_cesium_zoom_and_moon_polar_basemap_contracts():
+    """Verify CesiumJS zoom fixes, shared camera interaction helper, and polar-clean LOLA Moon basemap."""
+    client = _client()
+
+    planetary_html = client.get("/planetary").text
+    assert 'id="pl-basemap-select"' in planetary_html
+
+    helpers_js = client.get("/static/js/components/cesium_helpers.js").text
+    assert "getEffectiveCameraSpanMeters" in helpers_js
+    assert "bindCesiumCameraInteraction" in helpers_js
+    assert "maximumRadius * 0.0005" in helpers_js
+    assert "camera.percentageChanged = 0.02" in helpers_js
+    assert "if (factor > 1)" in helpers_js
+
+    planetary_js = client.get("/static/js/planetary_page.js").text
+    assert 'defaultBasemap: "lola_shade"' in planetary_js
+    assert "LRO_LOLA_Shade_Global_128ppd_v04" in planetary_js
+    assert "LRO_LOLA_ClrShade_Global_128ppd_v04" in planetary_js
+    assert "LRO_WAC_Mosaic_Global_303ppd_v02" in planetary_js
+    assert "collapsePoleRow(values[0], values[1])" in planetary_js
+    assert "collapsePoleRow(values[nLat - 1], values[nLat - 2])" in planetary_js
+    assert "_layerTokens" in planetary_js
+    assert "bindCesiumCameraInteraction(" in planetary_js
+
+    globe_js = client.get("/static/js/components/globe_map.js").text
+    assert "bindCesiumCameraInteraction(" in globe_js
+
+
+
 

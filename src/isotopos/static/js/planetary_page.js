@@ -2,6 +2,7 @@
 
 import { extractTarget, fetchMetadata } from "./api.js";
 import {
+  bindCesiumCameraInteraction,
   cameraHeightToApproxZoom,
   createAutoSpinController,
   createCesiumViewer,
@@ -18,32 +19,97 @@ import { escapeHtml, setButtonPressed, setSpinButtonState } from "./ui/dom.js";
 
 const PLANETARY_TILES = {
   moon: {
-    url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
-    layer: "LRO_WAC_Mosaic_Global_303ppd_v02",
-    attribution: "NASA Moon Trek / LRO WAC (303 ppd)",
     bgColor: "#141821",
     fallbackRamp: [[34, 40, 50], [168, 176, 190]],
-    tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
-    maximumLevel: 8,
     radiusEquatorial: 1737400,
     radiusPolar: 1737400,
+    defaultBasemap: "lola_shade",
+    basemaps: {
+      lola_shade: {
+        label: "Basemap: LOLA Shaded Relief",
+        layers: [
+          {
+            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_LOLA_Shade_Global_128ppd_v04/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.png",
+            layer: "LRO_LOLA_Shade_Global_128ppd_v04",
+            format: "image/png",
+            tileMatrixLabels: ["0", "1", "2", "3", "4", "5"],
+            maximumLevel: 5,
+            attribution: "NASA Moon Trek / LRO LOLA Shaded Relief (128 ppd)",
+            alpha: 1.0,
+          },
+        ],
+      },
+      lola_clr: {
+        label: "Basemap: LOLA Color Elevation",
+        layers: [
+          {
+            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_LOLA_ClrShade_Global_128ppd_v04/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.png",
+            layer: "LRO_LOLA_ClrShade_Global_128ppd_v04",
+            format: "image/png",
+            tileMatrixLabels: ["0", "1", "2", "3", "4", "5"],
+            maximumLevel: 5,
+            attribution: "NASA Moon Trek / LRO LOLA Color Shaded (128 ppd)",
+            alpha: 1.0,
+          },
+        ],
+      },
+      wac_hybrid: {
+        label: "Basemap: LRO WAC + LOLA Polar Fill",
+        layers: [
+          {
+            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_LOLA_Shade_Global_128ppd_v04/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.png",
+            layer: "LRO_LOLA_Shade_Global_128ppd_v04",
+            format: "image/png",
+            tileMatrixLabels: ["0", "1", "2", "3", "4", "5"],
+            maximumLevel: 5,
+            attribution: "NASA Moon Trek / LOLA",
+            alpha: 1.0,
+          },
+          {
+            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+            layer: "LRO_WAC_Mosaic_Global_303ppd_v02",
+            format: "image/jpeg",
+            tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+            maximumLevel: 8,
+            attribution: "NASA Moon Trek / LRO WAC (303 ppd) + LOLA",
+            alpha: 0.72,
+          },
+        ],
+      },
+    },
   },
   mars: {
-    url: "https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
-    layer: "Mars_Viking_MDIM21_ClrMosaic_global_232m",
-    attribution: "NASA Mars Trek / Viking MDIM2.1 (232 m)",
     bgColor: "#26120c",
     fallbackRamp: [[62, 26, 18], [212, 134, 96]],
-    tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7"],
-    maximumLevel: 7,
     radiusEquatorial: 3396190,
     radiusPolar: 3376200,
+    defaultBasemap: "viking",
+    basemaps: {
+      viking: {
+        label: "Basemap: Viking MDIM2.1 Color",
+        layers: [
+          {
+            url: "https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+            layer: "Mars_Viking_MDIM21_ClrMosaic_global_232m",
+            format: "image/jpeg",
+            tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7"],
+            maximumLevel: 7,
+            attribution: "NASA Mars Trek / Viking MDIM2.1 (232 m)",
+            alpha: 1.0,
+          },
+        ],
+      },
+    },
   },
 };
 
 const plState = {
   metadata: null,
   body: "moon",
+  basemapByBody: {
+    moon: PLANETARY_TILES.moon.defaultBasemap,
+    mars: PLANETARY_TILES.mars.defaultBasemap,
+  },
   presetId: null,
   target: null,
   overlayParam: "none",
@@ -61,14 +127,15 @@ const plState = {
 
 let _viewer = null;
 let _viewerBody = null;
-let _handler = null;
+let _interaction = null;
 let _fallbackLayer = null;
-let _basemapLayer = null;
+let _basemapLayers = [];
 let _overlayLayer = null;
 let _pinBillboards = null;
 let _pinLabels = null;
 let _selectedRing = null;
 let _pinImages = null;
+const _layerTokens = { fallback: 0, overlay: 0 };
 
 function getPlanetaryPinImages() {
   if (_pinImages) return _pinImages;
@@ -149,14 +216,15 @@ function buildPoleNormalizedRows(values) {
     return zeros / Math.max(1, row.length);
   };
 
-  const southMean = rowMean(values[0]);
-  rows[0] = new Array(values[0].length).fill(southMean);
+  const collapsePoleRow = (row, adjacentRow) => {
+    const adjMean = rowMean(adjacentRow);
+    // Some global grids zero-pad exact ±90° pole rows; fall back to the adjacent ring mean when valid
+    const fillVal = zeroFraction(row) >= 0.8 && Math.abs(adjMean) > 1e-6 ? adjMean : rowMean(row);
+    return new Array(row.length).fill(fillVal);
+  };
 
-  const northRow = values[nLat - 1];
-  const subNorthMean = rowMean(values[nLat - 2]);
-  // Some global grids zero-pad the exact +90° pole row; fall back to the sub-polar ring mean when valid
-  const northMean = zeroFraction(northRow) >= 0.8 && Math.abs(subNorthMean) > 1e-6 ? subNorthMean : rowMean(northRow);
-  rows[nLat - 1] = new Array(northRow.length).fill(northMean);
+  rows[0] = collapsePoleRow(values[0], values[1]);
+  rows[nLat - 1] = collapsePoleRow(values[nLat - 1], values[nLat - 2]);
   return rows;
 }
 
@@ -240,6 +308,65 @@ function makeSolidFallbackDataUrl(body) {
   return canvas.toDataURL("image/png");
 }
 
+function populateBasemapDropdown(body) {
+  const sel = document.getElementById("pl-basemap-select");
+  if (!sel) return;
+  const spec = PLANETARY_TILES[body] || PLANETARY_TILES.moon;
+  const basemaps = spec.basemaps || {};
+  const entries = Object.entries(basemaps);
+  sel.innerHTML = "";
+  for (const [id, cfg] of entries) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = cfg.label;
+    sel.appendChild(opt);
+  }
+  const activeId = basemaps[plState.basemapByBody[body]] ? plState.basemapByBody[body] : spec.defaultBasemap;
+  plState.basemapByBody[body] = activeId;
+  sel.value = activeId;
+  sel.disabled = entries.length <= 1;
+}
+
+function applyBasemapLayers(body) {
+  if (!_viewer || _viewer.isDestroyed()) return;
+  const Cesium = window.Cesium;
+  const spec = PLANETARY_TILES[body] || PLANETARY_TILES.moon;
+  const ellipsoid = _viewer.scene.globe.ellipsoid;
+  const basemapId = plState.basemapByBody[body] || spec.defaultBasemap;
+  const basemapCfg = spec.basemaps?.[basemapId] || Object.values(spec.basemaps || {})[0];
+
+  for (const layer of _basemapLayers) {
+    if (_viewer.imageryLayers.contains(layer)) {
+      _viewer.imageryLayers.remove(layer, true);
+    }
+  }
+  _basemapLayers = [];
+  if (!basemapCfg?.layers?.length) return;
+
+  // Insert Trek imagery layers directly after fallback layer (index 1+) and beneath overlay layer
+  let insertIdx = _fallbackLayer ? _viewer.imageryLayers.indexOf(_fallbackLayer) + 1 : 0;
+  if (insertIdx < 0) insertIdx = 0;
+
+  for (const layerSpec of basemapCfg.layers) {
+    const provider = new Cesium.WebMapTileServiceImageryProvider({
+      url: layerSpec.url,
+      layer: layerSpec.layer,
+      style: "default",
+      format: layerSpec.format || "image/png",
+      tileMatrixSetID: "default028mm",
+      tileMatrixLabels: layerSpec.tileMatrixLabels,
+      tilingScheme: new Cesium.GeographicTilingScheme({ ellipsoid }),
+      tileWidth: 256,
+      tileHeight: 256,
+      maximumLevel: layerSpec.maximumLevel,
+      credit: new Cesium.Credit(layerSpec.attribution),
+    });
+    const imgLayer = _viewer.imageryLayers.addImageryProvider(provider, insertIdx++);
+    imgLayer.alpha = layerSpec.alpha ?? 1.0;
+    _basemapLayers.push(imgLayer);
+  }
+}
+
 function populateOverlayDropdown() {
   const sel = document.getElementById("pl-overlay-select");
   if (!sel || !plState.metadata) return;
@@ -277,25 +404,31 @@ function updateLegendUI(paramSpec, minV, maxV) {
     `linear-gradient(90deg, ${stops.map(([t, c]) => `${c} ${Math.round(t * 100)}%`).join(", ")})`;
 }
 
-async function replaceSingleTileLayer(currentLayer, dataUrl, { alpha = 1.0, show = true } = {}) {
+async function replaceSingleTileLayer(slotKey, getLayer, setLayer, dataUrl, { alpha = 1.0, show = true } = {}) {
   if (!_viewer || _viewer.isDestroyed()) return null;
+  const token = ++_layerTokens[slotKey];
+  const viewerAtCall = _viewer;
   const Cesium = window.Cesium;
-  const ellipsoid = _viewer.scene.globe.ellipsoid;
+  const ellipsoid = viewerAtCall.scene.globe.ellipsoid;
   const provider = await Cesium.SingleTileImageryProvider.fromUrl(dataUrl, {
     rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90, new Cesium.Rectangle()),
     ellipsoid,
   });
-  if (!_viewer || _viewer.isDestroyed()) return null;
-  const insertIdx = currentLayer ? _viewer.imageryLayers.indexOf(currentLayer) : -1;
-  if (currentLayer) {
-    _viewer.imageryLayers.remove(currentLayer, true);
+  if (token !== _layerTokens[slotKey] || _viewer !== viewerAtCall || viewerAtCall.isDestroyed()) {
+    return null;
+  }
+  const currentLayer = getLayer();
+  const insertIdx = currentLayer ? viewerAtCall.imageryLayers.indexOf(currentLayer) : -1;
+  if (currentLayer && insertIdx >= 0) {
+    viewerAtCall.imageryLayers.remove(currentLayer, true);
   }
   const nextLayer =
     insertIdx >= 0
-      ? _viewer.imageryLayers.addImageryProvider(provider, insertIdx)
-      : _viewer.imageryLayers.addImageryProvider(provider);
+      ? viewerAtCall.imageryLayers.addImageryProvider(provider, insertIdx)
+      : viewerAtCall.imageryLayers.addImageryProvider(provider);
   nextLayer.alpha = alpha;
   nextLayer.show = show;
+  setLayer(nextLayer);
   return nextLayer;
 }
 
@@ -303,6 +436,7 @@ async function refreshOverlayLayer() {
   if (!_viewer || _viewer.isDestroyed() || !plState.mapReady) return;
 
   if (plState.overlayParam === "none") {
+    _layerTokens.overlay++;
     plState.activeSlice = null;
     if (_overlayLayer) _overlayLayer.show = false;
     updateLegendUI(null, 0, 0);
@@ -316,7 +450,16 @@ async function refreshOverlayLayer() {
     if (plState.body !== bodyAtFetch || plState.overlayParam !== paramAtFetch) return;
     plState.activeSlice = slice;
     const { url, minV, maxV } = renderSliceToEquirectangularDataUrl(slice, plState.palette, 230);
-    _overlayLayer = await replaceSingleTileLayer(_overlayLayer, url, { alpha: 0.68, show: true });
+    const placed = await replaceSingleTileLayer(
+      "overlay",
+      () => _overlayLayer,
+      (layer) => {
+        _overlayLayer = layer;
+      },
+      url,
+      { alpha: 0.68, show: true },
+    );
+    if (!placed) return;
     const paramSpec = plState.metadata.parameters.find((p) => p.id === paramAtFetch);
     updateLegendUI(paramSpec, minV, maxV);
   } catch (err) {
@@ -337,7 +480,15 @@ async function refreshFallbackShadedTerrain() {
       plState.shadedUrlCache[body] = url;
     }
     if (plState.body === body) {
-      _fallbackLayer = await replaceSingleTileLayer(_fallbackLayer, url, { alpha: 0.94, show: true });
+      await replaceSingleTileLayer(
+        "fallback",
+        () => _fallbackLayer,
+        (layer) => {
+          _fallbackLayer = layer;
+        },
+        url,
+        { alpha: 0.94, show: true },
+      );
     }
   } catch {
     // Keep solid fallback if API unavailable
@@ -535,16 +686,16 @@ const _plSpinController = createAutoSpinController({
 
 async function mountPlanetaryViewer(body) {
   const Cesium = window.Cesium;
-  if (_handler) {
-    _handler.destroy();
-    _handler = null;
+  if (_interaction) {
+    _interaction.destroy();
+    _interaction = null;
   }
   if (_viewer && !_viewer.isDestroyed()) {
     _viewer.destroy();
   }
   _viewer = null;
   _fallbackLayer = null;
-  _basemapLayer = null;
+  _basemapLayers = [];
   _overlayLayer = null;
   _pinBillboards = null;
   _pinLabels = null;
@@ -554,6 +705,7 @@ async function mountPlanetaryViewer(body) {
 
   const spec = PLANETARY_TILES[body] || PLANETARY_TILES.moon;
   const ellipsoid = getBodyEllipsoid(body);
+  populateBasemapDropdown(body);
 
   const viewer = createCesiumViewer("planetary-map", {
     ellipsoid,
@@ -576,23 +728,10 @@ async function mountPlanetaryViewer(body) {
   _fallbackLayer = viewer.imageryLayers.addImageryProvider(fallbackProvider);
   _fallbackLayer.alpha = 0.94;
 
-  // Layer 1: NASA Solar System Treks EPSG:4326 WMTS tiles (full -90°..+90° polar coverage)
-  const trekProvider = new Cesium.WebMapTileServiceImageryProvider({
-    url: spec.url,
-    layer: spec.layer,
-    style: "default",
-    format: "image/jpeg",
-    tileMatrixSetID: "default028mm",
-    tileMatrixLabels: spec.tileMatrixLabels,
-    tilingScheme: new Cesium.GeographicTilingScheme({ ellipsoid }),
-    tileWidth: 256,
-    tileHeight: 256,
-    maximumLevel: spec.maximumLevel,
-    credit: new Cesium.Credit(spec.attribution),
-  });
-  _basemapLayer = viewer.imageryLayers.addImageryProvider(trekProvider);
+  // Layer 1+: NASA Solar System Treks EPSG:4326 WMTS basemap (Moon defaults to LOLA Shaded Relief for clean poles)
+  applyBasemapLayers(body);
 
-  // Layer 2: Parameter overlay layer (equirectangular -90..+90)
+  // Top Layer: Parameter overlay layer (equirectangular -90..+90)
   _overlayLayer = viewer.imageryLayers.addImageryProvider(fallbackProvider);
   _overlayLayer.alpha = 0.68;
   _overlayLayer.show = false;
@@ -609,13 +748,8 @@ async function mountPlanetaryViewer(body) {
   });
 
   const cursorPillEl = document.getElementById("pl-cursor-pill");
-  let plHoverRafId = 0;
-  let plPendingPos = null;
-  const renderCursorPill = () => {
-    plHoverRafId = 0;
-    const pos = plPendingPos;
-    plPendingPos = null;
-    if (!pos || !cursorPillEl || plState.pointerDown || viewer.isDestroyed()) return;
+  const renderCursorPill = (pos) => {
+    if (!cursorPillEl) return;
     const coords = pickGlobeLatLon(viewer, pos);
     if (!coords) return;
     const lat = coords.lat;
@@ -628,64 +762,37 @@ async function mountPlanetaryViewer(body) {
     cursorPillEl.textContent = `${plState.body.toUpperCase()} · ${lat.toFixed(2)}°, ${lon.toFixed(2)}°${extra}`;
   };
 
-  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
-  _handler = handler;
-
-  handler.setInputAction(() => {
-    plState.pointerDown = true;
-    plState.userInteracting = true;
-    viewer.camera.cancelFlight?.();
-  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
-
-  handler.setInputAction(() => {
-    plState.pointerDown = false;
-    plState.userInteracting = false;
-    _plSpinController.requestFrame();
-  }, Cesium.ScreenSpaceEventType.LEFT_UP);
-
-  handler.setInputAction(() => {
-    plState.pointerDown = true;
-    plState.userInteracting = true;
-    viewer.camera.cancelFlight?.();
-  }, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
-
-  handler.setInputAction(() => {
-    plState.pointerDown = false;
-    plState.userInteracting = false;
-    _plSpinController.requestFrame();
-  }, Cesium.ScreenSpaceEventType.RIGHT_UP);
-
-  handler.setInputAction(() => {
-    plState.userInteracting = true;
-    viewer.camera.cancelFlight?.();
-    clearTimeout(viewer._wheelTimeout);
-    viewer._wheelTimeout = setTimeout(() => {
-      if (!plState.pointerDown) {
-        plState.userInteracting = false;
-        _plSpinController.requestFrame();
+  _interaction = bindCesiumCameraInteraction(viewer, {
+    onPointerDown: () => {
+      plState.pointerDown = true;
+      plState.userInteracting = true;
+    },
+    onPointerUp: () => {
+      plState.pointerDown = false;
+      plState.userInteracting = false;
+      _plSpinController.requestFrame();
+    },
+    onWheelStart: () => {
+      plState.userInteracting = true;
+    },
+    onWheelIdle: () => {
+      plState.userInteracting = false;
+      _plSpinController.requestFrame();
+    },
+    onHoverFrame: renderCursorPill,
+    onClick: (pos) => {
+      const picked = viewer.scene.pick(pos);
+      if (picked?.id?.kind === "mission_pin") {
+        selectPreset(picked.id.id, true);
+        return;
       }
-    }, 2000);
-  }, Cesium.ScreenSpaceEventType.WHEEL);
-
-  handler.setInputAction((movement) => {
-    if (plState.pointerDown) return;
-    plPendingPos = Cesium.Cartesian2.clone(movement.endPosition, plPendingPos);
-    if (!plHoverRafId) {
-      plHoverRafId = requestAnimationFrame(renderCursorPill);
-    }
-  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
-
-  handler.setInputAction((click) => {
-    const picked = viewer.scene.pick(click.position);
-    if (picked?.id?.kind === "mission_pin") {
-      selectPreset(picked.id.id, true);
-      return;
-    }
-    const coords = pickGlobeLatLon(viewer, click.position);
-    if (coords) {
-      extractCustomCoord(coords.lat, coords.lon, false);
-    }
-  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      const coords = pickGlobeLatLon(viewer, pos);
+      if (coords) {
+        extractCustomCoord(coords.lat, coords.lon, false);
+      }
+    },
+    wheelIdleMs: 2000,
+  });
 
   viewer.camera.changed.addEventListener(() => _plSpinController.requestFrame());
 
@@ -700,6 +807,11 @@ async function mountPlanetaryViewer(body) {
 function bindEvents() {
   document.getElementById("pl-btn-moon").addEventListener("click", () => switchBody("moon"));
   document.getElementById("pl-btn-mars").addEventListener("click", () => switchBody("mars"));
+
+  document.getElementById("pl-basemap-select")?.addEventListener("change", (e) => {
+    plState.basemapByBody[plState.body] = e.target.value;
+    applyBasemapLayers(plState.body);
+  });
 
   document.getElementById("pl-overlay-select").addEventListener("change", (e) => {
     plState.overlayParam = e.target.value;

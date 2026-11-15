@@ -10,14 +10,32 @@ export function getEllipsoidRadiusMeters(viewer) {
 
 export function maplibreZoomToCameraHeightMeters(zoom, radiusMeters = DEFAULT_RADIUS_M) {
   const z = Number.isFinite(zoom) ? zoom : 1.55;
-  return Math.max(80_000, radiusMeters * 3.1 * Math.pow(0.5, z - 1.55));
+  const minHeight = Math.max(500, radiusMeters * 0.0005);
+  return Math.max(minHeight, radiusMeters * 3.1 * Math.pow(0.5, z - 1.55));
+}
+
+export function getEffectiveCameraSpanMeters(viewer) {
+  if (!viewer || viewer.isDestroyed()) return DEFAULT_RADIUS_M * 3.1;
+  const Cesium = window.Cesium;
+  const radiusMeters = getEllipsoidRadiusMeters(viewer);
+  const minHeight = Math.max(500, radiusMeters * 0.0005);
+  if (Cesium && viewer.scene.mode === Cesium.SceneMode.SCENE2D) {
+    const frustum = viewer.camera.frustum;
+    const width = Math.abs((frustum.right ?? 1) - (frustum.left ?? -1));
+    const height2d = Math.abs((frustum.top ?? 1) - (frustum.bottom ?? -1));
+    const span = Math.max(width, height2d);
+    if (Number.isFinite(span) && span > 0) {
+      return Math.max(minHeight, span * 0.5);
+    }
+  }
+  const pos = viewer.camera.positionCartographic;
+  return pos ? Math.max(minHeight, pos.height) : radiusMeters * 3.1;
 }
 
 export function cameraHeightToApproxZoom(viewer) {
   if (!viewer || viewer.isDestroyed()) return 1.55;
   const radiusMeters = getEllipsoidRadiusMeters(viewer);
-  const pos = viewer.camera.positionCartographic;
-  const height = pos ? Math.max(50_000, pos.height) : radiusMeters * 3.1;
+  const height = getEffectiveCameraSpanMeters(viewer);
   return 1.55 + Math.log2((radiusMeters * 3.1) / height);
 }
 
@@ -81,9 +99,10 @@ export function createCesiumViewer(
 
   const ctrl = scene.screenSpaceCameraController;
   ctrl.enableZoom = true;
-  ctrl.minimumZoomDistance = targetEllipsoid.maximumRadius * 0.004;
+  ctrl.minimumZoomDistance = targetEllipsoid.maximumRadius * 0.0005;
   ctrl.maximumZoomDistance = targetEllipsoid.maximumRadius * 8.0;
   ctrl.enableLook = false;
+  camera.percentageChanged = 0.02;
 
   const startHeight = maplibreZoomToCameraHeightMeters(initialZoom, targetEllipsoid.maximumRadius);
   camera.setView({
@@ -114,44 +133,58 @@ export function flyToLatLon(viewer, { lon, lat, zoom = 3.2, durationSec = 1.25 }
   if (typeof viewer.camera.cancelFlight === "function") {
     viewer.camera.cancelFlight();
   }
-  viewer.camera.flyTo({
+  const flyOpts = {
     destination: Cesium.Cartesian3.fromDegrees(lon, clampedLat, height, ellipsoid),
     duration: prefersReducedMotion() ? 0 : durationSec,
-  });
+  };
+  if (viewer.scene.mode !== Cesium.SceneMode.SCENE2D) {
+    flyOpts.orientation = {
+      heading: 0,
+      pitch: -Cesium.Math.PI_OVER_TWO,
+      roll: 0,
+    };
+  }
+  viewer.camera.flyTo(flyOpts);
 }
 
 export function zoomViewerByFactor(viewer, factor = 1.55) {
-  if (!viewer || viewer.isDestroyed() || !Number.isFinite(factor) || factor <= 0) return;
+  if (!viewer || viewer.isDestroyed() || !Number.isFinite(factor) || factor <= 0 || factor === 1) return;
   const Cesium = window.Cesium;
   if (typeof viewer.camera.cancelFlight === "function") {
     viewer.camera.cancelFlight();
   }
   const ctrl = viewer.scene.screenSpaceCameraController;
   const radius = getEllipsoidRadiusMeters(viewer);
-  const minDist = ctrl?.minimumZoomDistance ?? radius * 0.004;
+  const minDist = ctrl?.minimumZoomDistance ?? radius * 0.0005;
   const maxDist = ctrl?.maximumZoomDistance ?? radius * 8.0;
 
   if (viewer.scene.mode === Cesium.SceneMode.SCENE2D) {
     const frustum = viewer.camera.frustum;
-    const width = Math.max(1000, (frustum.right ?? 1) - (frustum.left ?? -1));
-    const target = Math.max(minDist * 0.5, Math.min(radius * 10.0, width / factor));
-    const delta = width - target;
-    if (delta > 0) {
-      viewer.camera.zoomIn(delta);
-    } else if (delta < 0) {
-      viewer.camera.zoomOut(-delta);
+    const width = Math.abs((frustum.right ?? 1) - (frustum.left ?? -1));
+    const height2d = Math.abs((frustum.top ?? 1) - (frustum.bottom ?? -1));
+    const span = Math.max(100, width, height2d);
+    const minSpan = Math.max(1000, minDist * 2.0);
+    const maxSpan = radius * 12.0;
+    const target = Math.max(minSpan, Math.min(maxSpan, span / factor));
+    if (factor > 1) {
+      const delta = span - target;
+      if (delta > 0) viewer.camera.zoomIn(delta);
+    } else {
+      const delta = target - span;
+      if (delta > 0) viewer.camera.zoomOut(delta);
     }
     return;
   }
 
   const carto = viewer.camera.positionCartographic;
-  const height = carto ? Math.max(minDist * 0.5, carto.height) : radius * 2.5;
+  const height = carto ? Math.max(100, carto.height) : radius * 2.5;
   const targetHeight = Math.max(minDist, Math.min(maxDist, height / factor));
-  const delta = height - targetHeight;
-  if (delta > 0) {
-    viewer.camera.zoomIn(delta);
-  } else if (delta < 0) {
-    viewer.camera.zoomOut(-delta);
+  if (factor > 1) {
+    const delta = height - targetHeight;
+    if (delta > 0) viewer.camera.zoomIn(delta);
+  } else {
+    const delta = targetHeight - height;
+    if (delta > 0) viewer.camera.zoomOut(delta);
   }
 }
 
@@ -237,4 +270,99 @@ export function makePinDataUrl({ fill, stroke = "#ffffff", radius = 8, strokeWid
   ctx.stroke();
 
   return canvas.toDataURL("image/png");
+}
+
+/**
+ * Bind standard Cesium camera pointer/wheel interaction, RAF-throttled hover, and click dispatch.
+ * Consolidates shared interaction handling across the Earth and Planetary globes.
+ */
+export function bindCesiumCameraInteraction(
+  viewer,
+  {
+    onPointerDown,
+    onPointerUp,
+    onWheelStart,
+    onWheelIdle,
+    onHoverFrame,
+    onHoverClear,
+    onClick,
+    wheelIdleMs = 2000,
+  } = {},
+) {
+  const Cesium = window.Cesium;
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  let hoverRafId = 0;
+  let pendingPos = null;
+  let wheelTimeout = 0;
+  let isDown = false;
+
+  const cancelHover = () => {
+    pendingPos = null;
+    if (hoverRafId) {
+      cancelAnimationFrame(hoverRafId);
+      hoverRafId = 0;
+    }
+    onHoverClear?.();
+  };
+
+  const handleDown = () => {
+    isDown = true;
+    viewer.camera.cancelFlight?.();
+    cancelHover();
+    onPointerDown?.();
+  };
+
+  const handleUp = () => {
+    isDown = false;
+    onPointerUp?.();
+  };
+
+  handler.setInputAction(handleDown, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+  handler.setInputAction(handleUp, Cesium.ScreenSpaceEventType.LEFT_UP);
+  handler.setInputAction(handleDown, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
+  handler.setInputAction(handleUp, Cesium.ScreenSpaceEventType.RIGHT_UP);
+
+  handler.setInputAction(() => {
+    viewer.camera.cancelFlight?.();
+    cancelHover();
+    onWheelStart?.();
+    clearTimeout(wheelTimeout);
+    wheelTimeout = setTimeout(() => {
+      if (!isDown) {
+        onWheelIdle?.();
+      }
+    }, wheelIdleMs);
+  }, Cesium.ScreenSpaceEventType.WHEEL);
+
+  handler.setInputAction((movement) => {
+    if (isDown) {
+      cancelHover();
+      return;
+    }
+    pendingPos = Cesium.Cartesian2.clone(movement.endPosition, pendingPos);
+    if (!hoverRafId) {
+      hoverRafId = requestAnimationFrame(() => {
+        hoverRafId = 0;
+        const pos = pendingPos;
+        pendingPos = null;
+        if (!pos || isDown || viewer.isDestroyed()) return;
+        onHoverFrame?.(pos);
+      });
+    }
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+  handler.setInputAction((click) => {
+    onClick?.(click.position);
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+  return {
+    handler,
+    destroy() {
+      clearTimeout(wheelTimeout);
+      cancelHover();
+      if (!handler.isDestroyed()) {
+        handler.destroy();
+      }
+    },
+  };
 }
