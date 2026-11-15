@@ -1,30 +1,45 @@
-// Dedicated /planetary 3D Moon & Mars Target Explorer
+// Dedicated /planetary 3D Moon & Mars Target Explorer (CesiumJS, full -90..+90 polar coverage)
 
 import { extractTarget, fetchMetadata } from "./api.js";
-import { normalizeLon180, samplePaletteRgb } from "./components/color_scale.js";
+import {
+  cameraHeightToApproxZoom,
+  createAutoSpinController,
+  createCesiumViewer,
+  flyToLatLon,
+  makePinDataUrl,
+  pickGlobeLatLon,
+  setViewerProjection,
+  zoomViewerByFactor,
+} from "./components/cesium_helpers.js";
+import { getPaletteLut, normalizeLon180 } from "./components/color_scale.js";
 import { initStarfield } from "./components/starfield.js";
 import { PALETTES } from "./state.js";
-import { escapeHtml, prefersReducedMotion, setButtonPressed, setSpinButtonState } from "./ui/dom.js";
+import { escapeHtml, setButtonPressed, setSpinButtonState } from "./ui/dom.js";
 
 const PLANETARY_TILES = {
   moon: {
-    url: "https://cartocdn-gusc.global.ssl.fastly.net/opmbuilder/api/v1/map/named/opm-moon-basemap-v0-1/all/{z}/{x}/{y}.png",
-    attribution: "OpenPlanetaryMap Moon / NASA LRO LOLA",
+    url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+    layer: "LRO_WAC_Mosaic_Global_303ppd_v02",
+    attribution: "NASA Moon Trek / LRO WAC (303 ppd)",
     bgColor: "#141821",
+    fallbackRamp: [[34, 40, 50], [168, 176, 190]],
+    tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+    maximumLevel: 8,
+    radiusEquatorial: 1737400,
+    radiusPolar: 1737400,
   },
   mars: {
-    url: "https://cartocdn-gusc.global.ssl.fastly.net/opmbuilder/api/v1/map/named/opm-mars-basemap-v0-2/all/{z}/{x}/{y}.png",
-    attribution: "OpenPlanetaryMap Mars / NASA MGS MOLA",
+    url: "https://trek.nasa.gov/tiles/Mars/EQ/Mars_Viking_MDIM21_ClrMosaic_global_232m/1.0.0/default/default028mm/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+    layer: "Mars_Viking_MDIM21_ClrMosaic_global_232m",
+    attribution: "NASA Mars Trek / Viking MDIM2.1 (232 m)",
     bgColor: "#26120c",
+    fallbackRamp: [[62, 26, 18], [212, 134, 96]],
+    tileMatrixLabels: ["0", "1", "2", "3", "4", "5", "6", "7"],
+    maximumLevel: 7,
+    radiusEquatorial: 3396190,
+    radiusPolar: 3376200,
   },
 };
-
-const IMAGE_MERCATOR_BOUNDS = [
-  [-180, 85.05112878],
-  [180, 85.05112878],
-  [180, -85.05112878],
-  [-180, -85.05112878],
-];
 
 const plState = {
   metadata: null,
@@ -34,7 +49,7 @@ const plState = {
   overlayParam: "none",
   palette: "bioluminescent",
   isGlobe: true,
-  autoSpin: !prefersReducedMotion(),
+  autoSpin: true,
   userInteracting: false,
   pointerDown: false,
   map: null,
@@ -43,6 +58,33 @@ const plState = {
   shadedUrlCache: {},
   activeSlice: null,
 };
+
+let _viewer = null;
+let _viewerBody = null;
+let _handler = null;
+let _fallbackLayer = null;
+let _basemapLayer = null;
+let _overlayLayer = null;
+let _pinBillboards = null;
+let _pinLabels = null;
+let _selectedRing = null;
+let _pinImages = null;
+
+function getPlanetaryPinImages() {
+  if (_pinImages) return _pinImages;
+  _pinImages = {
+    pinDefault: makePinDataUrl({ fill: "#e2e8f0", stroke: "#09101d", radius: 5.5, strokeWidth: 1.8, glow: false }),
+    pinSelected: makePinDataUrl({ fill: "#fbbf24", stroke: "#09101d", radius: 8, strokeWidth: 2, glow: true }),
+    selectedRing: makePinDataUrl({ fill: "#38bdf8", stroke: "#38bdf8", radius: 13, strokeWidth: 2.4, glow: false }),
+  };
+  return _pinImages;
+}
+
+function getBodyEllipsoid(body) {
+  const Cesium = window.Cesium;
+  const spec = PLANETARY_TILES[body] || PLANETARY_TILES.moon;
+  return new Cesium.Ellipsoid(spec.radiusEquatorial, spec.radiusEquatorial, spec.radiusPolar);
+}
 
 async function fetchPlanetaryGridSlice(body, paramId) {
   const key = `${body}:${paramId}`;
@@ -78,28 +120,50 @@ function bilinearSampleSlice(slice, lat, lon180) {
   return (1 - ty) * ((1 - tx) * v00 + tx * v10) + ty * ((1 - tx) * v01 + tx * v11);
 }
 
-const _paletteLutCache = new Map();
-
-function getPaletteLut(paletteName) {
-  let lut = _paletteLutCache.get(paletteName);
-  if (!lut) {
-    const stops = PALETTES[paletteName] || PALETTES.bioluminescent;
-    lut = new Uint8Array(256 * 3);
-    for (let i = 0; i < 256; i++) {
-      const [r, g, b] = samplePaletteRgb(stops, i / 255);
-      const base = i * 3;
-      lut[base] = r;
-      lut[base + 1] = g;
-      lut[base + 2] = b;
-    }
-    _paletteLutCache.set(paletteName, lut);
+function makeTwoStopLut(rgbStart, rgbEnd) {
+  const lut = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    lut[i * 3] = Math.round(rgbStart[0] + t * (rgbEnd[0] - rgbStart[0]));
+    lut[i * 3 + 1] = Math.round(rgbStart[1] + t * (rgbEnd[1] - rgbStart[1]));
+    lut[i * 3 + 2] = Math.round(rgbStart[2] + t * (rgbEnd[2] - rgbStart[2]));
   }
   return lut;
 }
 
-function renderSliceToMercatorDataUrl(slice, paletteName, alpha = 210) {
-  const w = 360;
-  const h = 180;
+// Collapse multi-valued pole rows into a uniform azimuthal mean so spherical rendering never forms radial starburst spokes
+function buildPoleNormalizedRows(values) {
+  const nLat = values.length;
+  if (nLat < 2) return values;
+  const rows = values.slice();
+  const rowMean = (row) => {
+    let sum = 0;
+    for (let j = 0; j < row.length; j++) sum += row[j];
+    return sum / Math.max(1, row.length);
+  };
+  const zeroFraction = (row) => {
+    let zeros = 0;
+    for (let j = 0; j < row.length; j++) {
+      if (row[j] === 0) zeros++;
+    }
+    return zeros / Math.max(1, row.length);
+  };
+
+  const southMean = rowMean(values[0]);
+  rows[0] = new Array(values[0].length).fill(southMean);
+
+  const northRow = values[nLat - 1];
+  const subNorthMean = rowMean(values[nLat - 2]);
+  // Some global grids zero-pad the exact +90° pole row; fall back to the sub-polar ring mean when valid
+  const northMean = zeroFraction(northRow) >= 0.8 && Math.abs(subNorthMean) > 1e-6 ? subNorthMean : rowMean(northRow);
+  rows[nLat - 1] = new Array(northRow.length).fill(northMean);
+  return rows;
+}
+
+// Direct equirectangular -90..+90 projection (Cesium SingleTileImageryProvider wraps directly without Mercator warp)
+function renderSliceToEquirectangularDataUrl(slice, paletteNameOrLut, alpha = 225) {
+  const w = 720;
+  const h = 360;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
@@ -110,7 +174,7 @@ function renderSliceToMercatorDataUrl(slice, paletteName, alpha = 210) {
   const step = Number(slice.step_deg);
   const nLat = slice.lats.length;
   const nLon = slice.lons.length;
-  const values = slice.values;
+  const values = buildPoleNormalizedRows(slice.values);
 
   let minV = Infinity;
   let maxV = -Infinity;
@@ -123,9 +187,8 @@ function renderSliceToMercatorDataUrl(slice, paletteName, alpha = 210) {
     }
   }
   const invSpan = 255 / Math.max(1e-6, maxV - minV);
-  const lut = getPaletteLut(paletteName);
+  const lut = paletteNameOrLut instanceof Uint8Array ? paletteNameOrLut : getPaletteLut(paletteNameOrLut);
 
-  // Precompute x-column lookup indices & weights once (360 vs 64,800)
   const j0Arr = new Int32Array(w);
   const j1Arr = new Int32Array(w);
   const txArr = new Float32Array(w);
@@ -139,9 +202,8 @@ function renderSliceToMercatorDataUrl(slice, paletteName, alpha = 210) {
   }
 
   for (let py = 0; py < h; py++) {
-    const mercY = Math.PI * (1 - (2 * (py + 0.5)) / h);
-    const lat = Math.max(-90, Math.min(90, (2 * Math.atan(Math.exp(mercY)) - Math.PI / 2) * (180 / Math.PI)));
-    const yf = (lat + 90) / step;
+    const lat = 90.0 - (180.0 * (py + 0.5)) / h;
+    const yf = (lat + 90.0) / step;
     const i0 = Math.min(nLat - 2, Math.max(0, Math.floor(yf)));
     const ty = Math.max(0, Math.min(1, yf - i0));
     const oneMinusTy = 1 - ty;
@@ -215,25 +277,47 @@ function updateLegendUI(paramSpec, minV, maxV) {
     `linear-gradient(90deg, ${stops.map(([t, c]) => `${c} ${Math.round(t * 100)}%`).join(", ")})`;
 }
 
+async function replaceSingleTileLayer(currentLayer, dataUrl, { alpha = 1.0, show = true } = {}) {
+  if (!_viewer || _viewer.isDestroyed()) return null;
+  const Cesium = window.Cesium;
+  const ellipsoid = _viewer.scene.globe.ellipsoid;
+  const provider = await Cesium.SingleTileImageryProvider.fromUrl(dataUrl, {
+    rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90, new Cesium.Rectangle()),
+    ellipsoid,
+  });
+  if (!_viewer || _viewer.isDestroyed()) return null;
+  const insertIdx = currentLayer ? _viewer.imageryLayers.indexOf(currentLayer) : -1;
+  if (currentLayer) {
+    _viewer.imageryLayers.remove(currentLayer, true);
+  }
+  const nextLayer =
+    insertIdx >= 0
+      ? _viewer.imageryLayers.addImageryProvider(provider, insertIdx)
+      : _viewer.imageryLayers.addImageryProvider(provider);
+  nextLayer.alpha = alpha;
+  nextLayer.show = show;
+  return nextLayer;
+}
+
 async function refreshOverlayLayer() {
-  if (!plState.map || !plState.mapReady) return;
-  const src = plState.map.getSource("pl-data-overlay");
-  if (!src) return;
+  if (!_viewer || _viewer.isDestroyed() || !plState.mapReady) return;
 
   if (plState.overlayParam === "none") {
     plState.activeSlice = null;
-    plState.map.setPaintProperty("pl-data-overlay-layer", "raster-opacity", 0);
+    if (_overlayLayer) _overlayLayer.show = false;
     updateLegendUI(null, 0, 0);
     return;
   }
 
   try {
-    const slice = await fetchPlanetaryGridSlice(plState.body, plState.overlayParam);
+    const bodyAtFetch = plState.body;
+    const paramAtFetch = plState.overlayParam;
+    const slice = await fetchPlanetaryGridSlice(bodyAtFetch, paramAtFetch);
+    if (plState.body !== bodyAtFetch || plState.overlayParam !== paramAtFetch) return;
     plState.activeSlice = slice;
-    const { url, minV, maxV } = renderSliceToMercatorDataUrl(slice, plState.palette, 230);
-    src.updateImage({ url, coordinates: IMAGE_MERCATOR_BOUNDS });
-    plState.map.setPaintProperty("pl-data-overlay-layer", "raster-opacity", 0.65);
-    const paramSpec = plState.metadata.parameters.find((p) => p.id === plState.overlayParam);
+    const { url, minV, maxV } = renderSliceToEquirectangularDataUrl(slice, plState.palette, 230);
+    _overlayLayer = await replaceSingleTileLayer(_overlayLayer, url, { alpha: 0.68, show: true });
+    const paramSpec = plState.metadata.parameters.find((p) => p.id === paramAtFetch);
     updateLegendUI(paramSpec, minV, maxV);
   } catch (err) {
     console.warn("Planetary overlay fetch failed:", err);
@@ -241,31 +325,23 @@ async function refreshOverlayLayer() {
 }
 
 async function refreshFallbackShadedTerrain() {
-  if (!plState.map || !plState.mapReady) return;
-  const src = plState.map.getSource("pl-fallback-relief");
-  if (!src) return;
+  if (!_viewer || _viewer.isDestroyed() || !plState.mapReady) return;
   const body = plState.body;
   try {
     let url = plState.shadedUrlCache[body];
     if (!url) {
       const slice = await fetchPlanetaryGridSlice(body, "elevation_m");
-      const pal = body === "mars" ? "magma" : "viridis";
-      url = renderSliceToMercatorDataUrl(slice, pal, 255).url;
+      const ramp = (PLANETARY_TILES[body] || PLANETARY_TILES.moon).fallbackRamp;
+      const fallbackLut = makeTwoStopLut(ramp[0], ramp[1]);
+      url = renderSliceToEquirectangularDataUrl(slice, fallbackLut, 255).url;
       plState.shadedUrlCache[body] = url;
     }
     if (plState.body === body) {
-      src.updateImage({ url, coordinates: IMAGE_MERCATOR_BOUNDS });
+      _fallbackLayer = await replaceSingleTileLayer(_fallbackLayer, url, { alpha: 0.94, show: true });
     }
   } catch {
     // Keep solid fallback if API unavailable
   }
-}
-
-function updateBasemapVisibility() {
-  if (!plState.map || !plState.mapReady) return;
-  plState.map.setLayoutProperty("opm-moon-layer", "visibility", plState.body === "moon" ? "visible" : "none");
-  plState.map.setLayoutProperty("opm-mars-layer", "visibility", plState.body === "mars" ? "visible" : "none");
-  refreshFallbackShadedTerrain();
 }
 
 function updateMarkersAndList() {
@@ -291,41 +367,45 @@ function updateMarkersAndList() {
     listEl.appendChild(btn);
   }
 
-  if (plState.map && plState.mapReady) {
-    const pinSrc = plState.map.getSource("pl-mission-pins");
-    if (pinSrc) {
-      pinSrc.setData({
-        type: "FeatureCollection",
-        features: presets.map((p) => ({
-          type: "Feature",
-          properties: {
-            id: p.id,
-            name: p.name,
-            is_selected: p.id === plState.presetId,
-          },
-          geometry: {
-            type: "Point",
-            coordinates: [normalizeLon180(p.lon), p.lat],
-          },
-        })),
+  if (_viewer && !_viewer.isDestroyed() && _pinBillboards && _pinLabels) {
+    const Cesium = window.Cesium;
+    const ellipsoid = _viewer.scene.globe.ellipsoid;
+    const imgs = getPlanetaryPinImages();
+    const pinHeight = ellipsoid.maximumRadius * 0.0025;
+
+    _pinBillboards.removeAll();
+    _pinLabels.removeAll();
+    for (const p of presets) {
+      const isSelected = p.id === plState.presetId;
+      const lon = normalizeLon180(p.lon);
+      const pos = Cesium.Cartesian3.fromDegrees(lon, p.lat, pinHeight, ellipsoid);
+      _pinBillboards.add({
+        id: { kind: "mission_pin", id: p.id, name: p.name },
+        position: pos,
+        image: isSelected ? imgs.pinSelected : imgs.pinDefault,
+      });
+      _pinLabels.add({
+        id: { kind: "mission_pin", id: p.id, name: p.name },
+        position: pos,
+        text: p.name,
+        font: "600 11px system-ui, -apple-system, sans-serif",
+        fillColor: Cesium.Color.fromCssColorString(isSelected ? "#fde68a" : "#e2e8f0"),
+        outlineColor: Cesium.Color.fromCssColorString("#060b16"),
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        verticalOrigin: Cesium.VerticalOrigin.TOP,
+        pixelOffset: new Cesium.Cartesian2(0, 11),
       });
     }
 
-    const selSrc = plState.map.getSource("pl-selected-point");
-    if (selSrc && plState.target) {
-      selSrc.setData({
-        type: "FeatureCollection",
-        features: [
-          {
-            type: "Feature",
-            properties: { name: plState.target.name },
-            geometry: {
-              type: "Point",
-              coordinates: [normalizeLon180(plState.target.lon), plState.target.lat],
-            },
-          },
-        ],
-      });
+    if (_selectedRing) {
+      if (plState.target) {
+        const lon = normalizeLon180(plState.target.lon);
+        _selectedRing.position = Cesium.Cartesian3.fromDegrees(lon, plState.target.lat, pinHeight * 1.15, ellipsoid);
+        _selectedRing.show = true;
+      } else {
+        _selectedRing.show = false;
+      }
     }
   }
 }
@@ -375,25 +455,29 @@ function renderTargetDetails() {
 
 async function selectPreset(presetId, fly = true) {
   const target = await extractTarget({ preset_id: presetId });
+  const bodyChanged = plState.body !== target.body;
   plState.body = target.body;
   plState.presetId = presetId;
   plState.target = target;
   setButtonPressed(document.getElementById("pl-btn-moon"), target.body === "moon");
   setButtonPressed(document.getElementById("pl-btn-mars"), target.body === "mars");
-  updateBasemapVisibility();
+  if (bodyChanged || _viewerBody !== target.body) {
+    await mountPlanetaryViewer(target.body);
+  }
   updateMarkersAndList();
   renderTargetDetails();
   await refreshOverlayLayer();
-  if (fly && plState.map) {
+  if (fly && _viewer && !_viewer.isDestroyed()) {
     plState.userInteracting = true;
-    plState.map.flyTo({
-      center: [normalizeLon180(target.lon), target.lat],
+    flyToLatLon(_viewer, {
+      lon: normalizeLon180(target.lon),
+      lat: target.lat,
       zoom: 2.6,
-      ...(prefersReducedMotion() ? { duration: 0 } : {}),
+      durationSec: 1.2,
     });
     setTimeout(() => {
       if (!plState.pointerDown) plState.userInteracting = false;
-    }, 2200);
+    }, 1400);
   }
 }
 
@@ -405,16 +489,17 @@ async function extractCustomCoord(lat, lon, fly = false) {
   plState.target = target;
   updateMarkersAndList();
   renderTargetDetails();
-  if (fly && plState.map) {
+  if (fly && _viewer && !_viewer.isDestroyed()) {
     plState.userInteracting = true;
-    plState.map.flyTo({
-      center: [lon180, clampedLat],
+    flyToLatLon(_viewer, {
+      lon: lon180,
+      lat: clampedLat,
       zoom: 2.4,
-      ...(prefersReducedMotion() ? { duration: 0 } : {}),
+      durationSec: 1.1,
     });
     setTimeout(() => {
       if (!plState.pointerDown) plState.userInteracting = false;
-    }, 2000);
+    }, 1300);
   }
 }
 
@@ -427,221 +512,189 @@ function switchBody(nextBody) {
   if (first) {
     selectPreset(first.id, true);
   } else {
-    updateBasemapVisibility();
-    refreshOverlayLayer();
+    mountPlanetaryViewer(nextBody).then(() => refreshOverlayLayer());
   }
 }
 
-function initPlanetaryMap() {
-  const style = {
-    version: 8,
-    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-    projection: { type: "globe" },
-    sky: {
-      "atmosphere-blend": 0.0,
-    },
-    sources: {
-      "pl-fallback-relief": {
-        type: "image",
-        url: makeSolidFallbackDataUrl(plState.body),
-        coordinates: IMAGE_MERCATOR_BOUNDS,
-      },
-      "opm-moon": {
-        type: "raster",
-        tiles: [PLANETARY_TILES.moon.url],
-        tileSize: 256,
-        maxzoom: 6,
-        attribution: PLANETARY_TILES.moon.attribution,
-      },
-      "opm-mars": {
-        type: "raster",
-        tiles: [PLANETARY_TILES.mars.url],
-        tileSize: 256,
-        maxzoom: 6,
-        attribution: PLANETARY_TILES.mars.attribution,
-      },
-      "pl-data-overlay": {
-        type: "image",
-        url: makeSolidFallbackDataUrl(plState.body),
-        coordinates: IMAGE_MERCATOR_BOUNDS,
-      },
-    },
-    layers: [
-      { id: "bg", type: "background", paint: { "background-color": "rgba(4, 8, 18, 0.0)" } },
-      { id: "pl-fallback-layer", type: "raster", source: "pl-fallback-relief", paint: { "raster-opacity": 0.92 } },
-      { id: "opm-moon-layer", type: "raster", source: "opm-moon" },
-      { id: "opm-mars-layer", type: "raster", source: "opm-mars", layout: { visibility: "none" } },
-      { id: "pl-data-overlay-layer", type: "raster", source: "pl-data-overlay", paint: { "raster-opacity": 0.0 } },
-    ],
+const _plSpinController = createAutoSpinController({
+  getViewer: () => _viewer,
+  shouldSpin: () =>
+    Boolean(
+      !document.hidden &&
+        _viewer &&
+        !_viewer.isDestroyed() &&
+        plState.mapReady &&
+        plState.isGlobe &&
+        plState.autoSpin &&
+        !plState.userInteracting &&
+        !plState.pointerDown &&
+        cameraHeightToApproxZoom(_viewer) < 2.2,
+    ),
+  rateDegPerSec: 2.0,
+});
+
+async function mountPlanetaryViewer(body) {
+  const Cesium = window.Cesium;
+  if (_handler) {
+    _handler.destroy();
+    _handler = null;
+  }
+  if (_viewer && !_viewer.isDestroyed()) {
+    _viewer.destroy();
+  }
+  _viewer = null;
+  _fallbackLayer = null;
+  _basemapLayer = null;
+  _overlayLayer = null;
+  _pinBillboards = null;
+  _pinLabels = null;
+  _selectedRing = null;
+  plState.mapReady = false;
+  _viewerBody = body;
+
+  const spec = PLANETARY_TILES[body] || PLANETARY_TILES.moon;
+  const ellipsoid = getBodyEllipsoid(body);
+
+  const viewer = createCesiumViewer("planetary-map", {
+    ellipsoid,
+    showAtmosphere: false,
+    baseColor: spec.bgColor,
+    initialLon: plState.target ? normalizeLon180(plState.target.lon) : 23,
+    initialLat: plState.target ? plState.target.lat : 0,
+    initialZoom: 1.65,
+  });
+  _viewer = viewer;
+  plState.map = viewer;
+
+  // Layer 0: Full -90..+90 equirectangular NASA LOLA/MOLA elevation relief (offline/loading fallback)
+  const solidUrl = makeSolidFallbackDataUrl(body);
+  const fallbackProvider = await Cesium.SingleTileImageryProvider.fromUrl(solidUrl, {
+    rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90, new Cesium.Rectangle()),
+    ellipsoid,
+  });
+  if (_viewer !== viewer || viewer.isDestroyed()) return;
+  _fallbackLayer = viewer.imageryLayers.addImageryProvider(fallbackProvider);
+  _fallbackLayer.alpha = 0.94;
+
+  // Layer 1: NASA Solar System Treks EPSG:4326 WMTS tiles (full -90°..+90° polar coverage)
+  const trekProvider = new Cesium.WebMapTileServiceImageryProvider({
+    url: spec.url,
+    layer: spec.layer,
+    style: "default",
+    format: "image/jpeg",
+    tileMatrixSetID: "default028mm",
+    tileMatrixLabels: spec.tileMatrixLabels,
+    tilingScheme: new Cesium.GeographicTilingScheme({ ellipsoid }),
+    tileWidth: 256,
+    tileHeight: 256,
+    maximumLevel: spec.maximumLevel,
+    credit: new Cesium.Credit(spec.attribution),
+  });
+  _basemapLayer = viewer.imageryLayers.addImageryProvider(trekProvider);
+
+  // Layer 2: Parameter overlay layer (equirectangular -90..+90)
+  _overlayLayer = viewer.imageryLayers.addImageryProvider(fallbackProvider);
+  _overlayLayer.alpha = 0.68;
+  _overlayLayer.show = false;
+
+  _pinBillboards = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+  _pinLabels = viewer.scene.primitives.add(new Cesium.LabelCollection({ scene: viewer.scene }));
+  const ringColl = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+  _selectedRing = ringColl.add({
+    image: getPlanetaryPinImages().selectedRing,
+    position: Cesium.Cartesian3.fromDegrees(0, 0, ellipsoid.maximumRadius * 0.003, ellipsoid),
+    show: false,
+    width: 26,
+    height: 26,
+  });
+
+  const cursorPillEl = document.getElementById("pl-cursor-pill");
+  let plHoverRafId = 0;
+  let plPendingPos = null;
+  const renderCursorPill = () => {
+    plHoverRafId = 0;
+    const pos = plPendingPos;
+    plPendingPos = null;
+    if (!pos || !cursorPillEl || plState.pointerDown || viewer.isDestroyed()) return;
+    const coords = pickGlobeLatLon(viewer, pos);
+    if (!coords) return;
+    const lat = coords.lat;
+    const lon = normalizeLon180(coords.lon);
+    let extra = "";
+    if (plState.activeSlice) {
+      const val = bilinearSampleSlice(plState.activeSlice, lat, lon);
+      extra = ` · ${plState.overlayParam}: ${val.toFixed(1)}`;
+    }
+    cursorPillEl.textContent = `${plState.body.toUpperCase()} · ${lat.toFixed(2)}°, ${lon.toFixed(2)}°${extra}`;
   };
 
-  const map = new maplibregl.Map({
-    container: "planetary-map",
-    style,
-    center: [plState.target ? normalizeLon180(plState.target.lon) : 23, plState.target ? plState.target.lat : 0],
-    zoom: 1.65,
-  });
-  map.addControl(new maplibregl.NavigationControl(), "top-right");
+  const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+  _handler = handler;
 
-  map.on("mousedown", () => {
+  handler.setInputAction(() => {
     plState.pointerDown = true;
     plState.userInteracting = true;
-  });
-  map.on("mouseup", () => {
+    viewer.camera.cancelFlight?.();
+  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+
+  handler.setInputAction(() => {
     plState.pointerDown = false;
     plState.userInteracting = false;
-    requestPlanetarySpinFrame();
-  });
-  map.on("touchstart", () => {
+    _plSpinController.requestFrame();
+  }, Cesium.ScreenSpaceEventType.LEFT_UP);
+
+  handler.setInputAction(() => {
     plState.pointerDown = true;
     plState.userInteracting = true;
-  });
-  map.on("touchend", () => {
+    viewer.camera.cancelFlight?.();
+  }, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
+
+  handler.setInputAction(() => {
     plState.pointerDown = false;
     plState.userInteracting = false;
-    requestPlanetarySpinFrame();
-  });
-  map.on("zoomend", () => requestPlanetarySpinFrame());
-  map.on("style.load", () => {
-    map.setProjection({ type: plState.isGlobe ? "globe" : "mercator" });
-    requestPlanetarySpinFrame();
-  });
+    _plSpinController.requestFrame();
+  }, Cesium.ScreenSpaceEventType.RIGHT_UP);
 
-  map.on("load", () => {
-    map.addSource("pl-mission-pins", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-    map.addLayer({
-      id: "pl-mission-pins-circle",
-      type: "circle",
-      source: "pl-mission-pins",
-      paint: {
-        "circle-radius": ["case", ["get", "is_selected"], 8, 5.5],
-        "circle-color": ["case", ["get", "is_selected"], "#fbbf24", "#e2e8f0"],
-        "circle-stroke-width": 1.8,
-        "circle-stroke-color": "#09101d",
-      },
-    });
-    map.addLayer({
-      id: "pl-mission-pins-label",
-      type: "symbol",
-      source: "pl-mission-pins",
-      layout: {
-        "text-font": ["Open Sans Regular"],
-        "text-field": ["get", "name"],
-        "text-size": 11,
-        "text-offset": [0, 1.15],
-        "text-anchor": "top",
-        "text-allow-overlap": false,
-      },
-      paint: {
-        "text-color": ["case", ["get", "is_selected"], "#fde68a", "#e2e8f0"],
-        "text-halo-color": "#060b16",
-        "text-halo-width": 1.4,
-      },
-    });
-
-    map.addSource("pl-selected-point", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-    map.addLayer({
-      id: "pl-selected-ring",
-      type: "circle",
-      source: "pl-selected-point",
-      paint: {
-        "circle-radius": 13,
-        "circle-color": "rgba(56, 189, 248, 0.14)",
-        "circle-stroke-width": 2.4,
-        "circle-stroke-color": "#38bdf8",
-      },
-    });
-
-    const cursorPillEl = document.getElementById("pl-cursor-pill");
-    let plHoverRafId = 0;
-    let plPendingLngLat = null;
-    const renderCursorPill = () => {
-      plHoverRafId = 0;
-      const lngLat = plPendingLngLat;
-      plPendingLngLat = null;
-      if (!lngLat || !cursorPillEl || plState.pointerDown || map.isMoving()) return;
-      const lat = lngLat.lat;
-      const lon = normalizeLon180(lngLat.lng);
-      let extra = "";
-      if (plState.activeSlice) {
-        const val = bilinearSampleSlice(plState.activeSlice, lat, lon);
-        extra = ` · ${plState.overlayParam}: ${val.toFixed(1)}`;
+  handler.setInputAction(() => {
+    plState.userInteracting = true;
+    viewer.camera.cancelFlight?.();
+    clearTimeout(viewer._wheelTimeout);
+    viewer._wheelTimeout = setTimeout(() => {
+      if (!plState.pointerDown) {
+        plState.userInteracting = false;
+        _plSpinController.requestFrame();
       }
-      cursorPillEl.textContent =
-        `${plState.body.toUpperCase()} · ${lat.toFixed(2)}°, ${lon.toFixed(2)}°${extra}`;
-    };
+    }, 2000);
+  }, Cesium.ScreenSpaceEventType.WHEEL);
 
-    map.on("mousemove", (e) => {
-      if (plState.pointerDown || map.isMoving()) return;
-      plPendingLngLat = e.lngLat;
-      if (!plHoverRafId) {
-        plHoverRafId = requestAnimationFrame(renderCursorPill);
-      }
-    });
+  handler.setInputAction((movement) => {
+    if (plState.pointerDown) return;
+    plPendingPos = Cesium.Cartesian2.clone(movement.endPosition, plPendingPos);
+    if (!plHoverRafId) {
+      plHoverRafId = requestAnimationFrame(renderCursorPill);
+    }
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-    map.on("click", (e) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: ["pl-mission-pins-circle"] });
-      if (hits.length) {
-        selectPreset(hits[0].properties.id, true);
-      } else {
-        extractCustomCoord(e.lngLat.lat, e.lngLat.lng, false);
-      }
-    });
+  handler.setInputAction((click) => {
+    const picked = viewer.scene.pick(click.position);
+    if (picked?.id?.kind === "mission_pin") {
+      selectPreset(picked.id.id, true);
+      return;
+    }
+    const coords = pickGlobeLatLon(viewer, click.position);
+    if (coords) {
+      extractCustomCoord(coords.lat, coords.lon, false);
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-    plState.mapReady = true;
-    updateBasemapVisibility();
-    updateMarkersAndList();
-    refreshOverlayLayer();
-    requestPlanetarySpinFrame();
-  });
+  viewer.camera.changed.addEventListener(() => _plSpinController.requestFrame());
 
-  plState.map = map;
-  if (typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) requestPlanetarySpinFrame();
-    });
-  }
-  requestPlanetarySpinFrame();
-}
-
-let _plSpinRafId = 0;
-let _plSpinLastT = 0;
-
-function shouldSpinPlanetary() {
-  return Boolean(
-    !document.hidden &&
-      plState.map &&
-      plState.mapReady &&
-      plState.isGlobe &&
-      plState.autoSpin &&
-      !plState.userInteracting &&
-      !plState.pointerDown &&
-      plState.map.getZoom() < 2.2
-  );
-}
-
-function planetarySpinTick(now) {
-  _plSpinRafId = 0;
-  if (!shouldSpinPlanetary()) return;
-  const dt = Math.min(0.1, (now - _plSpinLastT) / 1000);
-  _plSpinLastT = now;
-  const c = plState.map.getCenter();
-  c.lng = normalizeLon180(c.lng + dt * 2.0);
-  plState.map.setCenter(c);
-  _plSpinRafId = requestAnimationFrame(planetarySpinTick);
-}
-
-function requestPlanetarySpinFrame() {
-  if (!_plSpinRafId && shouldSpinPlanetary()) {
-    _plSpinLastT = performance.now();
-    _plSpinRafId = requestAnimationFrame(planetarySpinTick);
-  }
+  setViewerProjection(viewer, plState.isGlobe);
+  plState.mapReady = true;
+  updateMarkersAndList();
+  refreshFallbackShadedTerrain();
+  refreshOverlayLayer();
+  _plSpinController.start();
 }
 
 function bindEvents() {
@@ -660,15 +713,33 @@ function bindEvents() {
   document.getElementById("pl-btn-spin").addEventListener("click", (e) => {
     plState.autoSpin = !plState.autoSpin;
     setSpinButtonState(e.target, plState.autoSpin);
-    requestPlanetarySpinFrame();
+    _plSpinController.requestFrame();
   });
 
   document.getElementById("pl-btn-proj").addEventListener("click", (e) => {
     plState.isGlobe = !plState.isGlobe;
-    plState.map?.setProjection({ type: plState.isGlobe ? "globe" : "mercator" });
+    setViewerProjection(_viewer, plState.isGlobe);
     e.target.textContent = plState.isGlobe ? "3D Globe: ON" : "2D Map: ON";
     e.target.setAttribute("aria-pressed", plState.isGlobe ? "true" : "false");
-    requestPlanetarySpinFrame();
+    _plSpinController.requestFrame();
+  });
+
+  document.getElementById("pl-zoom-in")?.addEventListener("click", () => {
+    zoomViewerByFactor(_viewer, 1.55);
+    _plSpinController.requestFrame();
+  });
+  document.getElementById("pl-zoom-out")?.addEventListener("click", () => {
+    zoomViewerByFactor(_viewer, 1 / 1.55);
+    _plSpinController.requestFrame();
+  });
+  document.getElementById("pl-zoom-reset")?.addEventListener("click", () => {
+    flyToLatLon(_viewer, {
+      lon: plState.target ? normalizeLon180(plState.target.lon) : 23,
+      lat: plState.target ? plState.target.lat : 0,
+      zoom: 1.65,
+      durationSec: 0.7,
+    });
+    _plSpinController.requestFrame();
   });
 
   document.getElementById("pl-extract-btn").addEventListener("click", () => {
@@ -707,7 +778,7 @@ async function init() {
     plState.body = bodyParam;
   }
 
-  initPlanetaryMap();
+  await mountPlanetaryViewer(plState.body);
 
   if (presetParam && plState.metadata.presets.some((p) => p.id === presetParam)) {
     await selectPreset(presetParam, true);

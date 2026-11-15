@@ -167,7 +167,7 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 
 ## DEC-013: O(1) H3 Hover Lookup, `rAF`-Coalesced Pointer Handling, Dirty-Checked Feature States, and Conditional HTTP Caching
 - **Date:** 2026-11-15
-- **Status:** Accepted
+- **Status:** Accepted (MapLibre `setFeatureState` implementation superseded by DEC-014; O(1) `h3-js` lookup, `rAF` hover, dirty-checking, `Float64Array` quantiles, and `ETag`/304 caching retained)
 - **Context:** Dragging and moving the cursor across the 3D Earth globe caused severe main-thread lag because `mousemove` synchronously called `map.queryRenderedFeatures` across 87,815 `earth-h3-fill` polygons, read `tooltip.offsetWidth`/`offsetHeight` and mutated `left`/`top` (layout thrashing), and rewrote `innerHTML` on every pixel move. Additionally, `updateEarthMapLayers` called `setFeatureState` 87,815 times unconditionally, `computeLayerColorRange` sorted an 87,815-element boxed JS array even for non-quantile modes, and `/api/v1/earth-grid` (35 MB) lacked `ETag`/`Cache-Control` headers.
 - **Options Considered:**
   1. Throttle `queryRenderedFeatures` on `earth-h3-fill` only, or disable H3 hover tooltips.
@@ -175,6 +175,31 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Decision:** Adopt Option 2. Preserves full H3 hexagon hover tooltips and zero-ETL-change compatibility while eliminating ~99% of main-thread cursor/drag work, accelerating layer updates, enabling browser caching of the 35 MB grid, and providing clear loading feedback.
 - **Consequences:** `index.html` loads `h3-js@4.1.0` (~30 KB UMD) with preconnect hints and graceful fallback if offline; `DataStore.get_cached_json_with_etag` provides SHA-256 ETags while preserving `get_cached_json_payload`'s 2-tuple contract.
 - **Related:** `REQUIREMENTS.md` (`NFR-1`, `NFR-4`), `DEC-001`, `DEC-012`, `src/isotopos/static/js/components/globe_map.js`, `src/isotopos/api/app.py`
+
+## DEC-014: Switch Earth & Planetary 3D Globes to CesiumJS (`EPSG:4326`) and Remove `±84.5°` H3 Polar Cutoff
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** Even in `globe` projection, MapLibre GL JS v5.0.0 tiles GeoJSON (`geojson-vt`) and `epsg3857` raster layers in Web Mercator space, clipping at `±85.051129°` and causing polar-cap stretching/pinching. To support MapLibre, `h3_geometry.py` previously excluded all H3 cells beyond `|lat| > 84.5°` and clamped vertices to `±84.95°`, leaving an un-tiled circular hole at the South Pole (`-84.5°..-90°`) in Antarctica and distorting polar hexagons. Similarly, `/planetary` had to inverse-Mercator-warp equirectangular Moon/Mars parameter overlays (`Shackleton Rim` `-89.9°`, `Malapert Massif` `-86°`).
+- **Options Considered:**
+  1. Patch MapLibre 5.x with a polar-cap fill and keep the `±84.5°` H3 exclusion.
+  2. Switch only the 3D globe to `Three.js`/`Globe.gl` while keeping MapLibre for 2D.
+  3. Switch both `/` (Earth) and `/planetary` (Moon/Mars) to **CesiumJS** (`cesium@1.123.0`) with Cesium Ion disabled (`NFR-2`), `EPSG:4326` NASA GIBS WMTS tiles (`TileMatrix 3+` aligned to a `10×5` `GeographicTilingScheme`), batched `Cesium.Primitive` (`PolygonGeometry` + `PerInstanceColorAppearance`, `asynchronous: false`) for ~88.6k H3 cells, direct `-90°..+90°` equirectangular `SingleTileImageryProvider` overlays on Moon/Mars, and removal of the `±84.5°`/`±84.95°` cutoff in `h3_geometry.py`.
+- **Decision:** Adopt Option 3 on branch `feat/cesiumjs-globe`. Both Earth and Moon/Mars render natively on true 3D ellipsoids (and `morphTo2D` geographic 2D maps) all the way to `±90°` with zero Web Mercator distortion, zero Ion auth friction, and full Antarctica South Pole H3 coverage.
+- **Consequences:** `h3_geometry.py` preserves polar-encircling cells (`all(abs(lt) > 85.0)`) and uses cache `ne_50m_h3_res4_cells_full.json`; `data/processed/*` is regenerated with full South Pole cells; `cesium_helpers.js` encapsulates viewer lifecycle, camera zoom/height mapping, ellipsoid picking, 2D/3D morphing, and auto-spin for both pages.
+- **Related:** `REQUIREMENTS.md` (`FR-4`, `FR-13`, `FR-3a`, `DR-1a`, `NFR-1`, `NFR-2`), `DEC-001`, `DEC-005`, `DEC-013`, `lessons-learned/2026-11-15-cesiumjs-gibs-epsg4326-and-polar-h3.md`
+
+## DEC-015: Antarctic Ice Shelf Tiling, Polar-Wedge Fanning, Outer-Perimeter Outlines & NASA Trek `EPSG:4326` Moon/Mars Basemaps
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** After switching to CesiumJS (`DEC-014`), polar inspection revealed three remaining gaps: (1) the `-90°` South Pole hexagon (`84f2939ffffffff`) remained an unsplit `305.77°`-span ring crossing `±180°`, causing `Cesium.PolygonGeometry` to generate `8/8` inward-facing triangles and stretch in 2D (`SCENE2D`); (2) Natural Earth `ne_50m_land.geojson` excludes floating Antarctic ice shelves (Ross, Filchner-Ronne, Amery, Larsen), leaving 593 H3 Res 4 cells untiled inside Antarctica, and `h3.polygon_to_cells_experimental(..., contain="overlap")` skipped 1 Arctic coastal vertex (`840ea69ffffffff` in Hudson Bay); and (3) `/planetary` used OpenPlanetaryMap `WebMercatorTilingScheme`, cutting off Moon and Mars basemap imagery at `±85.05°`.
+- **Options Considered:**
+  1. Keep `ne_50m_land.geojson` alone and patch only `84f2939ffffffff` winding in JavaScript.
+  2. Add Natural Earth 50m Antarctic ice shelves (`ne_50m_antarctic_ice_shelves_polys.geojson`) to `OPEN_DATASET_MANIFEST` + `load_land_h3_cells`, include polygon boundary vertices, fan polar-encircling cells (`fan_polar_ring`) into `<= 90°`-span `MultiPolygon` wedges meeting at `±90.0°` with outer-perimeter `PolylineGeometry` outlines in `globe_map.js`, and switch `/planetary` to NASA Solar System Treks `EPSG:4326` WMTS (`LRO_WAC_Mosaic_Global_303ppd_v02` and `Mars_Viking_MDIM21_ClrMosaic_global_232m`).
+- **Decision:** Adopt Option 2. Every ring in `earth_h3_grid.geojson` now satisfies `lon_span <= 90°` and outward Cesium winding (`0` inward triangles), Antarctic ice shelves are tiled cleanly (`89,022` total H3 Res 4 cells), and `/planetary` renders full `-90°..+90°` Moon and Mars basemaps without `±85.05°` polar cap seams.
+- **Consequences:** `h3_geometry.py` uses cache `ne_50m_h3_res4_cells_polar_v2.json`; `data/processed/*` is regenerated with `89,022` cells; `globe_map.js` uses `h3.cellToLatLng` / all-ring centroids for `MultiPolygon` cells and `PolylineColorAppearance` for `MultiPolygon` perimeter outlines.
+- **Related:** `REQUIREMENTS.md` (`FR-4`, `FR-13`, `FR-3a`, `DR-1`, `NFR-3`), `DEC-014`, `lessons-learned/2026-11-15-cesiumjs-polar-winding-and-antarctic-ice-shelves.md`
+
+
 
 
 

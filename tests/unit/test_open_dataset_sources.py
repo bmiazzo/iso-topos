@@ -882,3 +882,15 @@ def test_as_tiff_page_resolves_page_and_frame(tmp_path: Path):
         assert resolved1.tags.get("ImageWidth") is not None
 
 
+def test_open_dataset_manifest_includes_natural_earth_antarctic_ice_shelves():
+    """DEC-015 / NFR-3: Manifest includes Natural Earth 50m Antarctic ice shelves GeoJSON."""
+    from isotopos.etl.sources.open_dataset_manifest import OPEN_DATASET_MANIFEST
+
+    by_key = {asset.key: asset for asset in OPEN_DATASET_MANIFEST}
+    assert "ne_antarctic_ice_shelves" in by_key
+    asset = by_key["ne_antarctic_ice_shelves"]
+    assert asset.scope == "earth"
+    assert asset.rel_path == "ne_50m_antarctic_ice_shelves_polys.geojson"
+    assert "ne_50m_antarctic_ice_shelves_polys.geojson" in asset.url
+
+

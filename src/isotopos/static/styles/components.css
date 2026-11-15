@@ -739,3 +739,55 @@
   gap: 5px;
   margin-bottom: 6px;
 }
+
+.map-zoom-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: 34px;
+  background: rgba(13, 19, 33, 0.88);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.map-zoom-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  color: var(--text);
+  width: 34px;
+  height: 32px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.map-zoom-btn:last-child {
+  border-bottom: 0;
+}
+
+.map-zoom-btn:hover {
+  background: rgba(56, 189, 248, 0.16);
+  color: #f8fafc;
+}
+
+.map-zoom-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.map-zoom-btn-reset {
+  font-size: 14px;
+}

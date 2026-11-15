@@ -106,7 +106,9 @@ def test_adaptive_h3_earth_grid_builds_valid_geojson_and_parameters():
             lons = [pt[0] for pt in ring]
             lats = [pt[1] for pt in ring]
             assert max(lons) - min(lons) <= 90.0
-            assert min(lats) >= -85.0 and max(lats) <= 85.0
+            for a, b in zip(ring[:-1], ring[1:]):
+                assert abs(a[0] - b[0]) <= 90.0
+            assert min(lats) >= -90.0 and max(lats) <= 90.0
 
 
 def test_antimeridian_hex_geometry_splits_cleanly_into_multipolygon():
@@ -124,11 +126,60 @@ def test_antimeridian_hex_geometry_splits_cleanly_into_multipolygon():
         lats = [pt[1] for pt in ring]
         assert max(lons) - min(lons) <= 10.0
         assert min(lons) >= -180.0 and max(lons) <= 180.0
-        assert min(lats) >= -84.95 and max(lats) <= 84.95
+        assert min(lats) >= -90.0 and max(lats) <= 90.0
+
+
+def test_south_pole_hex_geometry_is_preserved_without_mercator_clamping():
+    """DEC-014 / DEC-015: Polar H3 cells down to -90 deg fan into <=90°-span wedges for CesiumJS 3D/2D."""
+    import h3
+
+    for lat, lon in [(-90.0, 0.0), (-86.5, 45.0), (-89.2, 179.9)]:
+        cid = h3.latlng_to_cell(lat, lon, 4)
+        geom = _safe_hex_geometry(cid)
+        assert geom is not None, f"Polar cell at ({lat}, {lon}) was dropped"
+        assert geom["type"] in ("Polygon", "MultiPolygon")
+        rings = [geom["coordinates"][0]] if geom["type"] == "Polygon" else [p[0] for p in geom["coordinates"]]
+        all_lats = [pt[1] for ring in rings for pt in ring]
+        assert min(all_lats) < -85.0
+        for ring in rings:
+            lons = [pt[0] for pt in ring]
+            assert max(lons) - min(lons) <= 90.0
+            for a, b in zip(ring[:-1], ring[1:]):
+                assert abs(a[0] - b[0]) <= 90.0
+
+    # Specifically verify the South Pole-encircling cell fans into a MultiPolygon reaching -90.0
+    sp_cid = h3.latlng_to_cell(-90.0, 0.0, 4)
+    sp_geom = _safe_hex_geometry(sp_cid)
+    assert sp_geom is not None and sp_geom["type"] == "MultiPolygon"
+    assert len(sp_geom["coordinates"]) >= 6
+    sp_lats = [pt[1] for poly in sp_geom["coordinates"] for pt in poly[0]]
+    assert min(sp_lats) == pytest.approx(-90.0)
+
+
+def test_fan_polar_ring_handles_north_and_south_poles():
+    """fan_polar_ring splits polar-encircling rings around +/-90° into <=90° lon wedges."""
+    from isotopos.etl.h3_geometry import fan_polar_ring
+
+    lons = [143.021, 90.5229, 35.8098, -31.4889, -103.228, -162.7501]
+    south_lats = [-89.7199, -89.7226, -89.7593, -89.7989, -89.7803, -89.7406]
+    south_geom = fan_polar_ring(lons, south_lats)
+    assert south_geom is not None and south_geom["type"] == "MultiPolygon"
+    for poly in south_geom["coordinates"]:
+        ring = poly[0]
+        assert max(p[0] for p in ring) - min(p[0] for p in ring) <= 90.0
+        assert any(p[1] == -90.0 for p in ring)
+
+    north_lats = [abs(lt) for lt in south_lats]
+    north_geom = fan_polar_ring(list(reversed(lons)), north_lats)
+    assert north_geom is not None and north_geom["type"] == "MultiPolygon"
+    for poly in north_geom["coordinates"]:
+        ring = poly[0]
+        assert max(p[0] for p in ring) - min(p[0] for p in ring) <= 90.0
+        assert any(p[1] == 90.0 for p in ring)
 
 
 def test_natural_earth_coastline_mask_excludes_oceans_and_includes_islands():
-    """FR-4 & DEC-005: Natural Earth 50m mask excludes open oceans and includes continents, islands, and hotspots."""
+    """FR-4 & DEC-005/DEC-014/DEC-015: Land + Antarctic ice shelves cover poles & vertices, excluding oceans."""
     import h3
 
     cells = _load_land_h3_cells(res=4)
@@ -136,10 +187,9 @@ def test_natural_earth_coastline_mask_excludes_oceans_and_includes_islands():
 
     # All 26 curated hotspots must be covered
     for hs in EARTH_HOTSPOTS:
-        if abs(hs.lat) <= 84.5:
-            assert h3.latlng_to_cell(hs.lat, hs.lon, 4) in cells, f"Missing hotspot {hs.id}"
+        assert h3.latlng_to_cell(hs.lat, hs.lon, 4) in cells, f"Missing hotspot {hs.id}"
 
-    # Key islands, peninsulas, polar sites, and antimeridian regions must be present
+    # Key islands, peninsulas, polar sites, Antarctic ice shelves, Arctic vertices, and antimeridian regions
     expected_land = [
         (19.82, -155.47),   # Hawaii
         (65.03, -16.75),    # Iceland
@@ -150,6 +200,12 @@ def test_natural_earth_coastline_mask_excludes_oceans_and_includes_islands():
         (-43.50, 170.50),   # New Zealand
         (-77.50, 162.50),   # McMurdo Dry Valleys (Antarctica)
         (-80.37, 77.35),    # Dome A (East Antarctica)
+        (-86.50, 45.00),    # East Antarctic Polar Plateau (< -84.5)
+        (-89.90, 0.00),     # South Pole
+        (-81.50, -175.00),  # Ross Ice Shelf (Antarctica)
+        (-80.50, -55.00),   # Filchner-Ronne Ice Shelf (Antarctica)
+        (-70.50, 71.00),    # Amery Ice Shelf (Antarctica)
+        (62.8189, -91.3495),  # Hudson Bay NE vertex (840ea69ffffffff)
     ]
     for lat, lon in expected_land:
         assert h3.latlng_to_cell(lat, lon, 4) in cells, f"Missing land ({lat}, {lon})"

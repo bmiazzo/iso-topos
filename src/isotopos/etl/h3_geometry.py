@@ -33,52 +33,66 @@ ANALOG_ISLANDS_LATLON: tuple[tuple[float, float], ...] = (
 )
 
 
+def _extract_cells_from_geojson(geo_path: Path, res: int) -> set[str]:
+    """Extract overlapping H3 cells and boundary-vertex cells from a GeoJSON Polygon/MultiPolygon file."""
+    cells: set[str] = set()
+    if not geo_path.exists():
+        return cells
+    geo = json.loads(geo_path.read_text(encoding="utf-8"))
+    for feat in geo.get("features", []):
+        geom = feat.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates") or []
+        if gtype == "Polygon":
+            polys = [coords]
+        elif gtype == "MultiPolygon":
+            polys = coords
+        else:
+            continue
+        for poly in polys:
+            outer = [(lat, lon) for lon, lat in poly[0]]
+            if len(outer) < 3:
+                continue
+            holes = [
+                [(lat, lon) for lon, lat in hole]
+                for hole in poly[1:]
+                if len(hole) >= 3
+            ]
+            h3_poly = h3.LatLngPoly(outer, *holes)
+            try:
+                extracted = h3.polygon_to_cells_experimental(h3_poly, res, contain="overlap")
+            except Exception:
+                extracted = h3.polygon_to_cells(h3_poly, res)
+            cells.update(extracted)
+            # Guarantee every polygon boundary vertex maps to an included cell
+            for lat, lon in outer:
+                cells.add(h3.latlng_to_cell(lat, lon, res))
+    return cells
+
+
 def load_land_h3_cells(res: int = 4) -> set[str]:
-    """Extract H3 land cells from Natural Earth 50m Land polygons + curated islands/hotspots."""
+    """Extract H3 land + Antarctic ice-shelf cells from Natural Earth 50m polygons + curated sites."""
     if res in _LAND_CELL_CACHE:
         return set(_LAND_CELL_CACHE[res])
 
     root = Path(__file__).resolve().parents[3]
     ne_path = root / "data" / "raw" / "ne_50m_land.geojson"
-    cache_path = root / "data" / "raw" / f"ne_50m_h3_res{res}_cells.json"
+    ice_path = root / "data" / "raw" / "ne_50m_antarctic_ice_shelves_polys.geojson"
+    cache_path = root / "data" / "raw" / f"ne_50m_h3_res{res}_cells_polar_v2.json"
 
     if cache_path.exists():
         cells = frozenset(json.loads(cache_path.read_text(encoding="utf-8")))
         _LAND_CELL_CACHE[res] = cells
         return set(cells)
 
-    cells: set[str] = set()
-    if ne_path.exists():
-        geo = json.loads(ne_path.read_text(encoding="utf-8"))
-        for feat in geo["features"]:
-            geom = feat["geometry"]
-            polys = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
-            for poly in polys:
-                outer = [(max(-84.5, min(84.5, lat)), lon) for lon, lat in poly[0]]
-                if len(outer) < 3:
-                    continue
-                holes = [
-                    [(max(-84.5, min(84.5, lat)), lon) for lon, lat in hole]
-                    for hole in poly[1:]
-                    if len(hole) >= 3
-                ]
-                h3_poly = h3.LatLngPoly(outer, *holes)
-                try:
-                    extracted = h3.polygon_to_cells_experimental(h3_poly, res, contain="overlap")
-                except Exception:
-                    extracted = h3.polygon_to_cells(h3_poly, res)
-                cells.update(extracted)
+    cells: set[str] = _extract_cells_from_geojson(ne_path, res)
+    cells.update(_extract_cells_from_geojson(ice_path, res))
 
     # Guarantee all curated Earth hotspots and key volcanic/polar analog islands are included
     for hs in EARTH_HOTSPOTS:
-        if abs(hs.lat) <= 84.5:
-            cells.add(h3.latlng_to_cell(hs.lat, hs.lon, res))
+        cells.add(h3.latlng_to_cell(hs.lat, hs.lon, res))
     for lat, lon in ANALOG_ISLANDS_LATLON:
-        if abs(lat) <= 84.5:
-            cells.add(h3.latlng_to_cell(lat, lon, res))
-
-    # Strictly filter out polar cap cells beyond Web Mercator's +-84.5 deg safe band
-    cells = {cid for cid in cells if abs(h3.cell_to_latlng(cid)[0]) <= 84.5}
+        cells.add(h3.latlng_to_cell(lat, lon, res))
 
     if ne_path.exists():
         cache_path.write_text(
@@ -124,11 +138,60 @@ def close_rounded_ring(pts: list[tuple[float, float]]) -> list[list[float]] | No
     return ring if len(ring) >= 4 else None
 
 
+def _append_polar_wedge(
+    polys: list[list[list[list[float]]]],
+    lon_a: float,
+    lat_a: float,
+    lon_b: float,
+    lat_b: float,
+    pole_lat: float,
+) -> None:
+    """Append one (or two if >90° wide) closed polar wedge triangles meeting at (mid_lon, pole_lat)."""
+    if abs(lon_b - lon_a) > 90.0:
+        mid_lon = 0.5 * (lon_a + lon_b)
+        mid_lat = 0.5 * (lat_a + lat_b)
+        _append_polar_wedge(polys, lon_a, lat_a, mid_lon, mid_lat, pole_lat)
+        _append_polar_wedge(polys, mid_lon, mid_lat, lon_b, lat_b, pole_lat)
+        return
+    ring = close_rounded_ring([(lon_a, lat_a), (lon_b, lat_b), (0.5 * (lon_a + lon_b), pole_lat)])
+    if ring is not None:
+        polys.append([ring])
+
+
+def fan_polar_ring(lons: list[float], lats: list[float]) -> dict[str, Any] | None:
+    """Split a pole-encircling boundary ring into <=90°-span wedges meeting at ±90.0°."""
+    n = len(lons)
+    if n < 3 or n != len(lats):
+        return None
+    pole_lat = -90.0 if sum(lats) < 0.0 else 90.0
+    polys: list[list[list[list[float]]]] = []
+    for i in range(n):
+        lon_a, lat_a = lons[i], lats[i]
+        lon_b, lat_b = lons[(i + 1) % n], lats[(i + 1) % n]
+        if abs(lon_b - lon_a) <= 180.0:
+            _append_polar_wedge(polys, lon_a, lat_a, lon_b, lat_b, pole_lat)
+        else:
+            # Edge crosses the ±180° antimeridian: unwrap into [0, 360] and split at x = 180.0
+            ax = lon_a if lon_a >= 0.0 else lon_a + 360.0
+            bx = lon_b if lon_b >= 0.0 else lon_b + 360.0
+            t = (180.0 - ax) / (bx - ax) if bx != ax else 0.5
+            lat_cross = lat_a + t * (lat_b - lat_a)
+            seam_a = 180.0 if lon_a >= 0.0 else -180.0
+            seam_b = 180.0 if lon_b >= 0.0 else -180.0
+            _append_polar_wedge(polys, lon_a, lat_a, seam_a, lat_cross, pole_lat)
+            _append_polar_wedge(polys, seam_b, lat_cross, lon_b, lat_b, pole_lat)
+    if not polys:
+        return None
+    if len(polys) == 1:
+        return {"type": "Polygon", "coordinates": polys[0]}
+    return {"type": "MultiPolygon", "coordinates": polys}
+
+
 def safe_hex_geometry(cell_id: str) -> dict[str, Any] | None:
-    """Convert H3 cell boundary to GeoJSON Polygon or antimeridian-split MultiPolygon."""
+    """Convert H3 cell boundary to GeoJSON Polygon or antimeridian/polar-split MultiPolygon."""
     boundary = h3.cell_to_boundary(cell_id)  # list of (lat, lon)
     lons = [pt[1] for pt in boundary]
-    lats = [max(-84.95, min(84.95, pt[0])) for pt in boundary]
+    lats = [pt[0] for pt in boundary]
     lon_span = max(lons) - min(lons)
 
     if lon_span <= 90.0:
@@ -157,6 +220,10 @@ def safe_hex_geometry(cell_id: str) -> dict[str, Any] | None:
                 return {"type": "MultiPolygon", "coordinates": polys}
             if len(polys) == 1:
                 return {"type": "Polygon", "coordinates": polys[0]}
+
+    # Polar-encircling H3 cell (e.g. cell straddling -90 deg South Pole)
+    if all(abs(lt) > 85.0 for lt in lats):
+        return fan_polar_ring(lons, lats)
 
     return None
 

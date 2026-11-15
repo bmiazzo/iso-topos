@@ -32,6 +32,14 @@ OPEN_DATASET_MANIFEST: tuple[DatasetAsset, ...] = (
         description="Natural Earth 1:50m Admin-0 Countries GeoJSON",
         min_bytes=500_000,
     ),
+    DatasetAsset(
+        key="ne_antarctic_ice_shelves",
+        scope="earth",
+        url="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_antarctic_ice_shelves_polys.geojson",
+        rel_path="ne_50m_antarctic_ice_shelves_polys.geojson",
+        description="Natural Earth 1:50m Antarctic Ice Shelves Polygons GeoJSON",
+        min_bytes=50_000,
+    ),
     # --- Earth global physical, climate, magnetic, lithology & cryosphere datasets ---
     DatasetAsset(
         key="emag2_sealevel",

@@ -1,20 +1,33 @@
-// 3D Earth Globe (MapLibre GL JS), basemap switching, ranked markers, hit-testing & layers
+// 3D Earth Globe (CesiumJS), EPSG:4326 NASA GIBS basemaps, batched H3 WebGL primitives & ranked pins
 
 import { fetchRawParameter } from "../api.js";
 import { PALETTES, state } from "../state.js";
-import { escapeHtml, prefersReducedMotion, setSpinButtonState } from "../ui/dom.js";
+import { escapeHtml, setSpinButtonState } from "../ui/dom.js";
 import {
-  buildFillColorExpression,
-  buildFillOpacityExpression,
-  buildOutlineColorExpression,
-  buildOutlineOpacityExpression,
+  cameraHeightToApproxZoom,
+  createAutoSpinController,
+  createCesiumViewer,
+  flyToLatLon,
+  makePinDataUrl,
+  pickGlobeLatLon,
+  setViewerProjection,
+  zoomViewerByFactor,
+} from "./cesium_helpers.js";
+import {
   computeLayerColorRange,
+  getPaletteLut,
   normalizeLon180,
   updateLegendGradient,
   updateLegendLabels,
+  writeCellRgbaBytes,
 } from "./color_scale.js";
 
 export { updateLegendGradient };
+
+const H3_CHUNK_SIZE = 4500;
+const H3_FILL_HEIGHT_M = 600;
+const H3_OUTLINE_HEIGHT_M = 950;
+const PIN_HEIGHT_M = 4000;
 
 function shortPinTitle(name) {
   if (!name) return "";
@@ -24,32 +37,100 @@ function shortPinTitle(name) {
 let _cachedGeojsonRef = null;
 let _siteCoordsById = new Map();
 let _sitePropsById = new Map();
-let _pushedDisplayVals = new Map();
+let _siteRingsById = new Map();
 let _displayDataVersion = 0;
 let _lastColorRange = { minVal: 0, maxVal: 100 };
+
+// Cesium scene objects
+let _viewer = null;
+let _blueMarbleLayer = null;
+let _modisLayer = null;
+let _h3FillBatches = []; // Array<{ prim: Cesium.Primitive, instIds: string[] }>
+let _h3OutlineBatches = [];
+let _h3OutlinesRequested = false;
+let _h3OutlinesVisible = false;
+let _cellInstById = new Map(); // cellId -> Array<{ prim, instId }>
+let _rgbaById = new Map(); // cellId -> Uint8Array(4)
+let _dirtyColorSync = false;
+let _h3BuildToken = 0;
+
+let _topH3Billboards = null;
+let _topH3Labels = null;
+let _hotspotBillboards = null;
+let _hotspotLabels = null;
+let _selectedPrimitives = null;
+let _selectedOutlinePrim = null;
+let _beaconBillboard = null;
+let _pinImages = null;
+
+function getPinImages() {
+  if (_pinImages) return _pinImages;
+  _pinImages = {
+    top3H3: makePinDataUrl({ fill: "#2dd4bf", stroke: "#ffffff", radius: 8, strokeWidth: 2, glow: true }),
+    topKH3: makePinDataUrl({ fill: "#0d9488", stroke: "#ffffff", radius: 6, strokeWidth: 1.8, glow: false }),
+    hsWellKnown: makePinDataUrl({ fill: "#f59e0b", stroke: "#ffffff", radius: 6.5, strokeWidth: 1.8, glow: true }),
+    hsNovel: makePinDataUrl({ fill: "#38bdf8", stroke: "#ffffff", radius: 6.5, strokeWidth: 1.8, glow: true }),
+    beacon: makePinDataUrl({ fill: "#2dd4bf", stroke: "#fde047", radius: 13, strokeWidth: 2.6, glow: false }),
+  };
+  return _pinImages;
+}
+
+function extractFeatureRings(geom) {
+  if (!geom?.coordinates) return [];
+  if (geom.type === "Polygon") {
+    return geom.coordinates[0]?.length >= 3 ? [geom.coordinates[0]] : [];
+  }
+  if (geom.type === "MultiPolygon") {
+    const out = [];
+    for (const poly of geom.coordinates) {
+      if (poly?.[0]?.length >= 3) out.push(poly[0]);
+    }
+    return out;
+  }
+  return [];
+}
 
 function ensureGeojsonIndexes() {
   if (_cachedGeojsonRef !== state.earthGeojson) {
     _cachedGeojsonRef = state.earthGeojson;
     _siteCoordsById = new Map();
     _sitePropsById = new Map();
-    _pushedDisplayVals = new Map();
+    _siteRingsById = new Map();
     for (const f of state.earthGeojson?.features || []) {
       const id = f?.properties?.id;
       if (!id) continue;
       _sitePropsById.set(id, f.properties);
-      const geom = f.geometry;
-      if (!geom?.coordinates) continue;
-      // Support both Polygon (coordinates[0]) and antimeridian MultiPolygon (coordinates[0][0])
-      const ring = geom.type === "MultiPolygon" ? geom.coordinates[0]?.[0] : geom.coordinates[0];
-      if (!ring?.length) continue;
-      let sx = 0;
-      let sy = 0;
-      for (const pt of ring) {
-        sx += pt[0];
-        sy += pt[1];
+      const rings = extractFeatureRings(f.geometry);
+      if (!rings.length) continue;
+      _siteRingsById.set(id, rings);
+
+      let resolved = false;
+      if (typeof window !== "undefined" && window.h3?.cellToLatLng) {
+        try {
+          const [cLat, cLon] = window.h3.cellToLatLng(id);
+          if (Number.isFinite(cLat) && Number.isFinite(cLon)) {
+            _siteCoordsById.set(id, [cLon, cLat]);
+            resolved = true;
+          }
+        } catch {
+          // Fall through to ring averaging for non-H3 IDs
+        }
       }
-      _siteCoordsById.set(id, [sx / ring.length, sy / ring.length]);
+      if (!resolved) {
+        let sx = 0;
+        let sy = 0;
+        let cnt = 0;
+        for (const ring of rings) {
+          for (const pt of ring) {
+            sx += pt[0];
+            sy += pt[1];
+            cnt += 1;
+          }
+        }
+        if (cnt > 0) {
+          _siteCoordsById.set(id, [sx / cnt, sy / cnt]);
+        }
+      }
     }
   }
 }
@@ -111,525 +192,670 @@ function positionTooltipWithinStage(tooltipEl, stageW, stageH, tipW, tipH, point
   tooltipEl.style.transform = `translate3d(${left}px, ${top}px, 0)`;
 }
 
+function ringToCartesianArray(ring) {
+  const Cesium = window.Cesium;
+  const flat = new Array(ring.length * 2);
+  for (let i = 0; i < ring.length; i++) {
+    flat[i * 2] = ring[i][0];
+    flat[i * 2 + 1] = ring[i][1];
+  }
+  return Cesium.Cartesian3.fromDegreesArray(flat);
+}
+
+function buildOuterPerimeterPolylineInstances(rings, heightM, colorAttr, width, idPrefix) {
+  const Cesium = window.Cesium;
+  const instances = [];
+  let segIdx = 0;
+  for (const ring of rings) {
+    for (let i = 0; i < ring.length - 1; i++) {
+      const a = ring[i];
+      const b = ring[i + 1];
+      // Omit artificial polar-wedge spoke edges and ±180° antimeridian clip seams
+      if (Math.abs(a[1]) >= 89.999 || Math.abs(b[1]) >= 89.999) continue;
+      if (Math.abs(Math.abs(a[0]) - 180.0) < 1e-3 && Math.abs(Math.abs(b[0]) - 180.0) < 1e-3) continue;
+      instances.push(
+        new Cesium.GeometryInstance({
+          id: `${idPrefix}:edge:${segIdx++}`,
+          geometry: new Cesium.PolylineGeometry({
+            positions: Cesium.Cartesian3.fromDegreesArrayHeights([a[0], a[1], heightM, b[0], b[1], heightM]),
+            width,
+            vertexFormat: Cesium.PolylineColorAppearance.VERTEX_FORMAT,
+          }),
+          attributes: { color: colorAttr },
+        }),
+      );
+    }
+  }
+  return instances;
+}
+
 export function highlightSelectedSiteOnMap(siteId, explicitCoords = null) {
-  if (!state.map) return;
+  if (!_viewer || _viewer.isDestroyed()) return;
+  const Cesium = window.Cesium;
   const targetId = siteId || "";
-  if (state.map.getLayer("earth-h3-selected")) {
-    state.map.setFilter("earth-h3-selected", ["==", ["get", "id"], targetId]);
+
+  if (_selectedOutlinePrim && _selectedPrimitives) {
+    _selectedPrimitives.remove(_selectedOutlinePrim);
+    _selectedOutlinePrim = null;
   }
-  if (state.map.getLayer("earth-hotspots-selected")) {
-    state.map.setFilter("earth-hotspots-selected", ["==", ["get", "id"], targetId]);
+
+  ensureGeojsonIndexes();
+  const rings = targetId ? _siteRingsById.get(targetId) : null;
+  if (rings?.length && _selectedPrimitives) {
+    const selColor = Cesium.ColorGeometryInstanceAttribute.fromColor(
+      Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.98),
+    );
+    if (rings.length === 1) {
+      const instances = [
+        new Cesium.GeometryInstance({
+          id: `sel:${targetId}:0`,
+          geometry: new Cesium.PolygonOutlineGeometry({
+            polygonHierarchy: new Cesium.PolygonHierarchy(ringToCartesianArray(rings[0])),
+            height: 1500,
+          }),
+          attributes: { color: selColor },
+        }),
+      ];
+      _selectedOutlinePrim = _selectedPrimitives.add(
+        new Cesium.Primitive({
+          geometryInstances: instances,
+          appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true }),
+          asynchronous: false,
+        }),
+      );
+    } else {
+      const polyInstances = buildOuterPerimeterPolylineInstances(rings, 1500, selColor, 2.0, `sel:${targetId}`);
+      if (polyInstances.length) {
+        _selectedOutlinePrim = _selectedPrimitives.add(
+          new Cesium.Primitive({
+            geometryInstances: polyInstances,
+            appearance: new Cesium.PolylineColorAppearance({ translucent: true }),
+            asynchronous: false,
+          }),
+        );
+      }
+    }
   }
-  const beaconSrc = state.map.getSource("earth-selected-beacon");
-  if (beaconSrc) {
+
+  if (_beaconBillboard) {
     const coords = targetId ? resolveSiteCoords(targetId, explicitCoords) : null;
-    beaconSrc.setData({
-      type: "FeatureCollection",
-      features: coords
-        ? [{ type: "Feature", properties: { id: targetId }, geometry: { type: "Point", coordinates: coords } }]
-        : [],
-    });
+    if (coords) {
+      _beaconBillboard.position = Cesium.Cartesian3.fromDegrees(coords[0], coords[1], PIN_HEIGHT_M + 1000);
+      _beaconBillboard.show = true;
+    } else {
+      _beaconBillboard.show = false;
+    }
   }
 }
 
 export function flyToSiteOnGlobe(lon, lat, zoom = 3.4, pauseSpin = true) {
-  if (!state.map) return;
+  if (!_viewer || _viewer.isDestroyed()) return;
   if (pauseSpin && state.autoSpin) {
     state.autoSpin = false;
     setSpinButtonState(document.getElementById("btn-toggle-spin"), false);
   }
   state.userInteracting = true;
   clearTimeout(state.flyToTimer);
-  const reduce = prefersReducedMotion();
-  state.map.flyTo({ center: [lon, lat], zoom, ...(reduce ? { duration: 0 } : { speed: 1.15 }) });
+  flyToLatLon(_viewer, { lon, lat, zoom, durationSec: 1.25 });
   state.flyToTimer = setTimeout(() => {
     if (!state.pointerDown) state.userInteracting = false;
-  }, reduce ? 100 : 2400);
+  }, 1400);
+}
+
+export function setEarthProjection(isGlobe) {
+  state.isGlobe = Boolean(isGlobe);
+  setViewerProjection(_viewer, state.isGlobe);
+  requestAutoSpinFrame();
+}
+
+export function zoomEarthGlobe(factor = 1.55) {
+  if (!_viewer || _viewer.isDestroyed()) return;
+  clearTimeout(state.flyToTimer);
+  zoomViewerByFactor(_viewer, factor);
+  syncOutlineVisibilityFromZoom();
+  requestAutoSpinFrame();
+}
+
+export function resetEarthGlobeView() {
+  if (!_viewer || _viewer.isDestroyed()) return;
+  flyToSiteOnGlobe(-20, 28, 1.55, false);
+}
+
+function flushPendingColorsToPrimitives() {
+  if (!_dirtyColorSync || !_h3FillBatches.length) return;
+  let anyNotReady = false;
+  for (const batch of _h3FillBatches) {
+    if (!batch.prim.ready) {
+      anyNotReady = true;
+      continue;
+    }
+    for (const [cellId, instId] of batch.cellEntries) {
+      const rgba = _rgbaById.get(cellId);
+      if (!rgba) continue;
+      const attrs = batch.prim.getGeometryInstanceAttributes(instId);
+      if (attrs) {
+        attrs.color = rgba;
+      }
+    }
+  }
+  _dirtyColorSync = anyNotReady;
+}
+
+function buildChunkInstances(features, startIdx, endIdx, isOutline) {
+  const Cesium = window.Cesium;
+  const instances = [];
+  const polylineInstances = [];
+  const cellEntries = [];
+  const defaultRgba = new Uint8Array([15, 23, 42, 0]);
+  const outlineAttr = isOutline
+    ? Cesium.ColorGeometryInstanceAttribute.fromColor(
+        Cesium.Color.fromCssColorString("rgba(226, 232, 240, 0.32)"),
+      )
+    : null;
+
+  for (let i = startIdx; i < endIdx; i++) {
+    const feat = features[i];
+    const cellId = feat?.properties?.id;
+    if (!cellId) continue;
+    const rings = extractFeatureRings(feat.geometry);
+    if (!rings.length) continue;
+
+    if (isOutline && rings.length > 1) {
+      polylineInstances.push(
+        ...buildOuterPerimeterPolylineInstances(rings, H3_OUTLINE_HEIGHT_M, outlineAttr, 1.0, cellId),
+      );
+      continue;
+    }
+
+    const rgba = !isOutline ? _rgbaById.get(cellId) || defaultRgba : null;
+    for (let rIdx = 0; rIdx < rings.length; rIdx++) {
+      const positions = ringToCartesianArray(rings[rIdx]);
+      const instId = rIdx === 0 ? cellId : `${cellId}#${rIdx}`;
+      const geom = isOutline
+        ? new Cesium.PolygonOutlineGeometry({
+            polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+            height: H3_OUTLINE_HEIGHT_M,
+          })
+        : new Cesium.PolygonGeometry({
+            polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+            height: H3_FILL_HEIGHT_M,
+            vertexFormat: Cesium.PerInstanceColorAppearance.VERTEX_FORMAT,
+          });
+      instances.push(
+        new Cesium.GeometryInstance({
+          id: instId,
+          geometry: geom,
+          attributes: {
+            color: isOutline
+              ? outlineAttr
+              : new Cesium.ColorGeometryInstanceAttribute(rgba[0], rgba[1], rgba[2], rgba[3]),
+          },
+        }),
+      );
+      if (!isOutline) {
+        cellEntries.push([cellId, instId]);
+      }
+    }
+  }
+  return { instances, polylineInstances, cellEntries };
+}
+
+function startBuildingH3FillPrimitives() {
+  if (!_viewer || _viewer.isDestroyed() || !state.earthGeojson?.features?.length) return;
+  const Cesium = window.Cesium;
+  const token = ++_h3BuildToken;
+  const features = state.earthGeojson.features;
+
+  for (const b of _h3FillBatches) {
+    _viewer.scene.primitives.remove(b.prim);
+  }
+  _h3FillBatches = [];
+  _cellInstById = new Map();
+
+  let offset = 0;
+  function processNextChunk() {
+    if (token !== _h3BuildToken || !_viewer || _viewer.isDestroyed()) return;
+    const end = Math.min(features.length, offset + H3_CHUNK_SIZE);
+    const { instances, cellEntries } = buildChunkInstances(features, offset, end, false);
+    if (instances.length) {
+      const prim = _viewer.scene.primitives.add(
+        new Cesium.Primitive({
+          geometryInstances: instances,
+          appearance: new Cesium.PerInstanceColorAppearance({
+            flat: true,
+            translucent: true,
+          }),
+          asynchronous: false,
+        }),
+      );
+      const batch = { prim, cellEntries };
+      _h3FillBatches.push(batch);
+      for (const [cellId, instId] of cellEntries) {
+        let arr = _cellInstById.get(cellId);
+        if (!arr) {
+          arr = [];
+          _cellInstById.set(cellId, arr);
+        }
+        arr.push({ prim, instId });
+      }
+      _dirtyColorSync = true;
+    }
+    offset = end;
+    if (offset < features.length) {
+      setTimeout(processNextChunk, 0);
+    } else {
+      _dirtyColorSync = true;
+    }
+  }
+
+  processNextChunk();
+}
+
+function ensureH3OutlinePrimitives() {
+  if (_h3OutlinesRequested || !_viewer || _viewer.isDestroyed() || !state.earthGeojson?.features?.length) {
+    return;
+  }
+  _h3OutlinesRequested = true;
+  const Cesium = window.Cesium;
+  const features = state.earthGeojson.features;
+  const token = _h3BuildToken;
+  let offset = 0;
+
+  function processNextOutlineChunk() {
+    if (token !== _h3BuildToken || !_viewer || _viewer.isDestroyed()) return;
+    const end = Math.min(features.length, offset + H3_CHUNK_SIZE);
+    const { instances, polylineInstances } = buildChunkInstances(features, offset, end, true);
+    if (instances.length) {
+      const prim = _viewer.scene.primitives.add(
+        new Cesium.Primitive({
+          geometryInstances: instances,
+          appearance: new Cesium.PerInstanceColorAppearance({
+            flat: true,
+            translucent: true,
+          }),
+          asynchronous: false,
+          show: _h3OutlinesVisible,
+        }),
+      );
+      _h3OutlineBatches.push(prim);
+    }
+    if (polylineInstances.length) {
+      const polyPrim = _viewer.scene.primitives.add(
+        new Cesium.Primitive({
+          geometryInstances: polylineInstances,
+          appearance: new Cesium.PolylineColorAppearance({ translucent: true }),
+          asynchronous: false,
+          show: _h3OutlinesVisible,
+        }),
+      );
+      _h3OutlineBatches.push(polyPrim);
+    }
+    offset = end;
+    if (offset < features.length) {
+      setTimeout(processNextOutlineChunk, 0);
+    }
+  }
+
+  processNextOutlineChunk();
+}
+
+function syncOutlineVisibilityFromZoom() {
+  if (!_viewer || _viewer.isDestroyed()) return;
+  const approxZoom = cameraHeightToApproxZoom(_viewer);
+  const shouldShow = approxZoom >= 2.55;
+  if (shouldShow && !_h3OutlinesRequested) {
+    ensureH3OutlinePrimitives();
+  }
+  if (_h3OutlinesVisible !== shouldShow) {
+    _h3OutlinesVisible = shouldShow;
+    for (const prim of _h3OutlineBatches) {
+      prim.show = shouldShow;
+    }
+  }
 }
 
 export function initEarthMap({ onInspectSite }) {
-  const style = {
-    version: 8,
-    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-    projection: { type: "globe" },
-    sky: {
-      "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 0.88, 5, 0.38, 7, 0.0],
-    },
-    sources: {
-      gibs_bluemarble: {
-        type: "raster",
-        tiles: [
-          "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/2004-08-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
-        ],
-        tileSize: 256,
-        maxzoom: 8,
-        attribution: "NASA GIBS / Earthdata",
-      },
-      gibs_modis: {
-        type: "raster",
-        tiles: [
-          "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/2024-07-15/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg",
-        ],
-        tileSize: 256,
-        maxzoom: 9,
-        attribution: "NASA Worldview GIBS",
-      },
-    },
-    layers: [
-      { id: "bg", type: "background", paint: { "background-color": "rgba(4, 8, 18, 0.0)" } },
-      { id: "gibs_bluemarble", type: "raster", source: "gibs_bluemarble" },
-      {
-        id: "gibs_modis",
-        type: "raster",
-        source: "gibs_modis",
-        layout: { visibility: "none" },
-      },
-    ],
-  };
+  const Cesium = window.Cesium;
+  const viewer = createCesiumViewer("earth-map", {
+    ellipsoid: Cesium.Ellipsoid.WGS84,
+    showAtmosphere: true,
+    baseColor: "#071021",
+    initialLon: -20,
+    initialLat: 28,
+    initialZoom: 1.55,
+  });
+  _viewer = viewer;
 
-  const map = new maplibregl.Map({
-    container: "earth-map",
-    style,
-    center: [-20, 28],
-    zoom: 1.55,
+  // NASA GIBS EPSG:4326 TileMatrix 3+ aligns cleanly to a 10x5 (36°x36°) GeographicTilingScheme covering -90°..+90°
+  const gibsScheme = new Cesium.GeographicTilingScheme({
+    numberOfLevelZeroTilesX: 10,
+    numberOfLevelZeroTilesY: 5,
   });
 
-  map.addControl(new maplibregl.NavigationControl(), "top-right");
+  const blueMarbleProvider = new Cesium.WebMapTileServiceImageryProvider({
+    url: "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/BlueMarble_NextGeneration/default/2004-08-01/500m/{TileMatrix}/{TileRow}/{TileCol}.jpeg",
+    layer: "BlueMarble_NextGeneration",
+    style: "default",
+    format: "image/jpeg",
+    tileMatrixSetID: "500m",
+    tileMatrixLabels: ["3", "4", "5", "6", "7", "8"],
+    tilingScheme: gibsScheme,
+    tileWidth: 512,
+    tileHeight: 512,
+    maximumLevel: 5,
+    credit: new Cesium.Credit("NASA GIBS / Earthdata"),
+  });
 
-  const pausePointer = () => {
+  const modisProvider = new Cesium.WebMapTileServiceImageryProvider({
+    url: "https://gibs.earthdata.nasa.gov/wmts/epsg4326/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/2024-07-15/250m/{TileMatrix}/{TileRow}/{TileCol}.jpg",
+    layer: "MODIS_Terra_CorrectedReflectance_TrueColor",
+    style: "default",
+    format: "image/jpeg",
+    tileMatrixSetID: "250m",
+    tileMatrixLabels: ["3", "4", "5", "6", "7", "8", "9"],
+    tilingScheme: gibsScheme,
+    tileWidth: 512,
+    tileHeight: 512,
+    maximumLevel: 6,
+    credit: new Cesium.Credit("NASA Worldview GIBS"),
+  });
+
+  _blueMarbleLayer = viewer.imageryLayers.addImageryProvider(blueMarbleProvider);
+  _modisLayer = viewer.imageryLayers.addImageryProvider(modisProvider);
+  _modisLayer.show = false;
+
+  _selectedPrimitives = viewer.scene.primitives.add(new Cesium.PrimitiveCollection());
+  _topH3Billboards = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+  _topH3Labels = viewer.scene.primitives.add(new Cesium.LabelCollection({ scene: viewer.scene }));
+  _hotspotBillboards = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+  _hotspotLabels = viewer.scene.primitives.add(new Cesium.LabelCollection({ scene: viewer.scene }));
+
+  const beaconColl = viewer.scene.primitives.add(new Cesium.BillboardCollection({ scene: viewer.scene }));
+  _beaconBillboard = beaconColl.add({
+    image: getPinImages().beacon,
+    position: Cesium.Cartesian3.fromDegrees(0, 0, PIN_HEIGHT_M),
+    show: false,
+    width: 30,
+    height: 30,
+  });
+
+  viewer.scene.postRender.addEventListener(() => {
+    if (_dirtyColorSync) {
+      flushPendingColorsToPrimitives();
+    }
+  });
+
+  viewer.camera.changed.addEventListener(() => {
+    syncOutlineVisibilityFromZoom();
+    requestAutoSpinFrame();
+  });
+
+  const tooltip = document.getElementById("hover-tooltip");
+  const mapContainer = document.getElementById("earth-map");
+  const mapCanvas = viewer.scene.canvas;
+
+  let hoverRafId = 0;
+  let pendingHoverPos = null;
+  let lastHoverKey = "";
+  let lastCursor = "";
+  let cachedTipW = 210;
+  let cachedTipH = 64;
+  let cachedStageW = mapContainer.clientWidth || 800;
+  let cachedStageH = mapContainer.clientHeight || 600;
+
+  const setCursor = (cursor) => {
+    if (lastCursor !== cursor) {
+      lastCursor = cursor;
+      mapCanvas.style.cursor = cursor;
+    }
+  };
+
+  const hideTooltip = () => {
+    pendingHoverPos = null;
+    if (hoverRafId) {
+      cancelAnimationFrame(hoverRafId);
+      hoverRafId = 0;
+    }
+    setCursor("");
+    if (lastHoverKey !== "") {
+      lastHoverKey = "";
+      tooltip.classList.add("hidden");
+    }
+  };
+
+  const showTooltip = (key, html, point, cursor) => {
+    setCursor(cursor);
+    if (lastHoverKey !== key) {
+      lastHoverKey = key;
+      tooltip.innerHTML = html;
+      tooltip.classList.remove("hidden");
+      cachedTipW = tooltip.offsetWidth || 210;
+      cachedTipH = tooltip.offsetHeight || 64;
+      cachedStageW = mapContainer.clientWidth || 800;
+      cachedStageH = mapContainer.clientHeight || 600;
+    }
+    positionTooltipWithinStage(tooltip, cachedStageW, cachedStageH, cachedTipW, cachedTipH, point);
+  };
+
+  const processHoverFrame = () => {
+    hoverRafId = 0;
+    const pos = pendingHoverPos;
+    pendingHoverPos = null;
+    if (!pos || state.pointerDown) return;
+
+    const picked = viewer.scene.pick(pos);
+    if (picked?.id?.kind === "hotspot") {
+      const p = picked.id.props;
+      const kind = p.is_well_known ? "Well-Known Baseline" : "Novel Hotspot";
+      const key = `hs:${p.id}:${p.score_pct}`;
+      const html =
+        `<strong>${escapeHtml(p.name)}</strong><br/>` +
+        `${escapeHtml(p.country || kind)}<br/>` +
+        `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
+      showTooltip(key, html, pos, "pointer");
+      return;
+    }
+    if (picked?.id?.kind === "top_h3") {
+      const p = picked.id.props;
+      const key = `pin:${p.id}:${p.rank}:${p.score_pct}`;
+      const html =
+        `<strong>#${escapeHtml(p.rank)} ${escapeHtml(p.name)}</strong><br/>` +
+        `${escapeHtml(p.country)} · Top H3 Region<br/>` +
+        `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
+      showTooltip(key, html, pos, "pointer");
+      return;
+    }
+
+    const coords = pickGlobeLatLon(viewer, pos);
+    if (!coords) {
+      hideTooltip();
+      return;
+    }
+
+    let props = null;
+    if (typeof window !== "undefined" && window.h3?.latLngToCell) {
+      const h3Id = window.h3.latLngToCell(coords.lat, normalizeLon180(coords.lon), 4);
+      props = getSitePropsById().get(h3Id) || null;
+    } else if (typeof picked?.id === "string") {
+      const baseId = picked.id.split("#")[0];
+      props = getSitePropsById().get(baseId) || null;
+    }
+
+    if (!props) {
+      hideTooltip();
+      return;
+    }
+
+    const val = state.cellDisplayValues[props.id] ?? -999999;
+    const isRaw = state.activeLayer.startsWith("raw:");
+    const cutoff = isRaw ? -99999 : state.minScoreFilter;
+
+    if (!isRaw && state.excludeWellKnown && props.is_well_known) {
+      const key = `excl:${props.id}`;
+      const html =
+        `<strong>${escapeHtml(props.country || props.name)}</strong><br/>` +
+        `Excluded Baseline Region`;
+      showTooltip(key, html, pos, "");
+      return;
+    }
+
+    if (val <= -99999 || val < cutoff) {
+      hideTooltip();
+      return;
+    }
+
+    let unitLabel = "%";
+    if (isRaw) {
+      const param = state.metadata.parameters.find((pm) => pm.id === state.activeLayer.slice(4));
+      unitLabel = param ? ` ${param.unit}` : "";
+    }
+    const place =
+      props.country && props.country !== props.region
+        ? `${props.country} (${props.region})`
+        : props.region;
+    const formattedVal = Number(val).toFixed(1);
+    const key = `h3:${props.id}:${formattedVal}:${unitLabel}`;
+    const html =
+      `<strong>${escapeHtml(props.name)}</strong><br/>` +
+      `${escapeHtml(place)}<br/>` +
+      `Value: <b>${escapeHtml(formattedVal)}${escapeHtml(unitLabel)}</b>`;
+    showTooltip(key, html, pos, "pointer");
+  };
+
+  const handler = new Cesium.ScreenSpaceEventHandler(mapCanvas);
+  handler.setInputAction(() => {
     state.pointerDown = true;
     state.userInteracting = true;
-  };
-  const resumePointer = () => {
+    clearTimeout(state.flyToTimer);
+    viewer.camera.cancelFlight?.();
+    hideTooltip();
+  }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+
+  handler.setInputAction(() => {
     state.pointerDown = false;
     state.userInteracting = false;
     requestAutoSpinFrame();
-  };
-  map.on("mousedown", pausePointer);
-  map.on("touchstart", pausePointer);
-  map.on("wheel", () => {
+  }, Cesium.ScreenSpaceEventType.LEFT_UP);
+
+  handler.setInputAction(() => {
+    state.pointerDown = true;
     state.userInteracting = true;
-    clearTimeout(map._wheelTimeout);
-    map._wheelTimeout = setTimeout(() => {
+    clearTimeout(state.flyToTimer);
+    viewer.camera.cancelFlight?.();
+    hideTooltip();
+  }, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
+
+  handler.setInputAction(() => {
+    state.pointerDown = false;
+    state.userInteracting = false;
+    requestAutoSpinFrame();
+  }, Cesium.ScreenSpaceEventType.RIGHT_UP);
+
+  handler.setInputAction(() => {
+    state.userInteracting = true;
+    clearTimeout(state.flyToTimer);
+    viewer.camera.cancelFlight?.();
+    hideTooltip();
+    clearTimeout(viewer._wheelTimeout);
+    viewer._wheelTimeout = setTimeout(() => {
       if (!state.pointerDown) {
         state.userInteracting = false;
         requestAutoSpinFrame();
       }
     }, 2200);
-  });
-  map.on("mouseup", resumePointer);
-  map.on("touchend", resumePointer);
-  map.on("zoomend", requestAutoSpinFrame);
+  }, Cesium.ScreenSpaceEventType.WHEEL);
 
-  map.on("style.load", () => {
-    map.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
-    requestAutoSpinFrame();
-  });
+  handler.setInputAction((movement) => {
+    if (state.pointerDown) {
+      hideTooltip();
+      return;
+    }
+    pendingHoverPos = Cesium.Cartesian2.clone(movement.endPosition, pendingHoverPos);
+    if (!hoverRafId) {
+      hoverRafId = requestAnimationFrame(processHoverFrame);
+    }
+  }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-  map.on("load", () => {
-    map.addSource("earth-h3", {
-      type: "geojson",
-      data: state.earthGeojson,
-      promoteId: "id",
-    });
-
-    map.addLayer({
-      id: "earth-h3-fill",
-      type: "fill",
-      source: "earth-h3",
-      paint: {
-        "fill-color": "#06b6d4",
-        "fill-opacity": 0.0,
-        "fill-antialias": false,
-      },
-    });
-
-    map.addLayer({
-      id: "earth-h3-outline",
-      type: "line",
-      source: "earth-h3",
-      paint: {
-        "line-color": "rgba(226, 232, 240, 0.55)",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 2.0, 0.2, 4.0, 0.6, 6.5, 1.2],
-        "line-opacity": ["interpolate", ["linear"], ["zoom"], 2.2, 0.0, 3.3, 0.18, 5.2, 0.45],
-      },
-    });
-
-    map.addLayer({
-      id: "earth-h3-selected",
-      type: "line",
-      source: "earth-h3",
-      filter: ["==", ["get", "id"], ""],
-      paint: {
-        "line-color": "#38bdf8",
-        "line-width": 2.8,
-        "line-opacity": 0.98,
-      },
-    });
-
-    // Top-K H3 Region Markers + Labels
-    map.addSource("earth-top-h3", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-
-    map.addLayer({
-      id: "earth-top-h3-halo",
-      type: "circle",
-      source: "earth-top-h3",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 10, 0.95, 19],
-        "circle-color": "#2dd4bf",
-        "circle-opacity": 0.26,
-        "circle-blur": 0.6,
-      },
-    });
-
-    map.addLayer({
-      id: "earth-top-h3-pin",
-      type: "circle",
-      source: "earth-top-h3",
-      paint: {
-        "circle-radius": ["case", ["get", "is_top3"], 8.0, 6.0],
-        "circle-color": ["case", ["get", "is_top3"], "#2dd4bf", "#0d9488"],
-        "circle-stroke-width": 2.0,
-        "circle-stroke-color": "#ffffff",
-      },
-    });
-
-    map.addLayer({
-      id: "earth-top-h3-label",
-      type: "symbol",
-      source: "earth-top-h3",
-      layout: {
-        "text-font": ["Open Sans Regular"],
-        "text-field": ["get", "label"],
-        "text-size": 11,
-        "text-offset": [0, -1.35],
-        "text-anchor": "bottom",
-        "text-allow-overlap": false,
-        "text-padding": 4,
-        "symbol-sort-key": ["get", "rank"],
-      },
-      paint: {
-        "text-color": "#ecfeff",
-        "text-halo-color": "#040812",
-        "text-halo-width": 1.8,
-      },
-    });
-
-    // Named Analog Hotspots (Score-scaled + Labels)
-    map.addSource("earth-hotspots", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-
-    map.addLayer({
-      id: "earth-hotspots-glow",
-      type: "circle",
-      source: "earth-hotspots",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 9, 0.95, 17],
-        "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
-        "circle-opacity": 0.28,
-        "circle-blur": 0.65,
-      },
-    });
-
-    map.addLayer({
-      id: "earth-hotspots-circle",
-      type: "circle",
-      source: "earth-hotspots",
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 4.8, 0.95, 8.6],
-        "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
-        "circle-stroke-width": 1.7,
-        "circle-stroke-color": "#ffffff",
-      },
-    });
-
-    map.addLayer({
-      id: "earth-hotspots-label",
-      type: "symbol",
-      source: "earth-hotspots",
-      layout: {
-        "text-font": ["Open Sans Regular"],
-        "text-field": ["get", "label"],
-        "text-size": 10.5,
-        "text-offset": [0, 1.25],
-        "text-anchor": "top",
-        "text-allow-overlap": false,
-        "text-padding": 4,
-        "symbol-sort-key": ["+", 25, ["get", "rank"]],
-      },
-      paint: {
-        "text-color": ["case", ["get", "is_well_known"], "#fde68a", "#bae6fd"],
-        "text-halo-color": "#040812",
-        "text-halo-width": 1.7,
-      },
-    });
-
-    map.addLayer({
-      id: "earth-hotspots-selected",
-      type: "circle",
-      source: "earth-hotspots",
-      filter: ["==", ["get", "id"], ""],
-      paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 11.0, 5.0, 15.0],
-        "circle-color": "rgba(56, 189, 248, 0.0)",
-        "circle-stroke-width": 2.6,
-        "circle-stroke-color": "#2dd4bf",
-      },
-    });
-
-    // High-contrast beacon ring around whichever site (H3 or Hotspot) is selected
-    map.addSource("earth-selected-beacon", {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-
-    map.addLayer({
-      id: "earth-selected-beacon-outer",
-      type: "circle",
-      source: "earth-selected-beacon",
-      paint: {
-        "circle-radius": 17,
-        "circle-color": "rgba(45, 212, 191, 0.08)",
-        "circle-stroke-width": 2.4,
-        "circle-stroke-color": "#fde047",
-      },
-    });
-
-    const tooltip = document.getElementById("hover-tooltip");
-    const mapContainer = map.getContainer();
-    const mapCanvas = map.getCanvas();
-    const pinLayers = ["earth-hotspots-circle", "earth-top-h3-pin"];
-    const interactiveLayers = ["earth-hotspots-circle", "earth-top-h3-pin", "earth-h3-fill"];
-
-    let hoverRafId = 0;
-    let pendingHoverEvent = null;
-    let lastHoverKey = "";
-    let lastCursor = "";
-    let cachedTipW = 210;
-    let cachedTipH = 64;
-    let cachedStageW = mapContainer.clientWidth || 800;
-    let cachedStageH = mapContainer.clientHeight || 600;
-
-    const setCursor = (cursor) => {
-      if (lastCursor !== cursor) {
-        lastCursor = cursor;
-        mapCanvas.style.cursor = cursor;
+  handler.setInputAction((click) => {
+    const picked = viewer.scene.pick(click.position);
+    if (picked?.id?.kind === "hotspot" || picked?.id?.kind === "top_h3") {
+      onInspectSite(picked.id.props.id);
+      return;
+    }
+    const coords = pickGlobeLatLon(viewer, click.position);
+    let cellId = null;
+    if (coords && typeof window !== "undefined" && window.h3?.latLngToCell) {
+      const candidate = window.h3.latLngToCell(coords.lat, normalizeLon180(coords.lon), 4);
+      if (getSitePropsById().has(candidate)) {
+        cellId = candidate;
       }
-    };
+    } else if (typeof picked?.id === "string") {
+      cellId = picked.id.split("#")[0];
+    }
+    if (!cellId) return;
+    const val = state.cellDisplayValues[cellId] ?? -999999;
+    if (val > -99999) {
+      onInspectSite(cellId);
+    }
+  }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
-    const hideTooltip = () => {
-      pendingHoverEvent = null;
-      if (hoverRafId) {
-        cancelAnimationFrame(hoverRafId);
-        hoverRafId = 0;
-      }
-      setCursor("");
-      if (lastHoverKey !== "") {
-        lastHoverKey = "";
-        tooltip.classList.add("hidden");
-      }
-    };
-
-    const showTooltip = (key, html, point, cursor) => {
-      setCursor(cursor);
-      if (lastHoverKey !== key) {
-        lastHoverKey = key;
-        tooltip.innerHTML = html;
-        tooltip.classList.remove("hidden");
-        cachedTipW = tooltip.offsetWidth || 210;
-        cachedTipH = tooltip.offsetHeight || 64;
-        cachedStageW = mapContainer.clientWidth || 800;
-        cachedStageH = mapContainer.clientHeight || 600;
-      }
-      positionTooltipWithinStage(tooltip, cachedStageW, cachedStageH, cachedTipW, cachedTipH, point);
-    };
-
-    const processHoverFrame = () => {
-      hoverRafId = 0;
-      const e = pendingHoverEvent;
-      pendingHoverEvent = null;
-      if (!e || state.pointerDown || map.isMoving()) {
-        return;
-      }
-
-      const pinHits = map.queryRenderedFeatures(e.point, { layers: pinLayers });
-      if (pinHits.length) {
-        const top = pinHits[0];
-        const p = top.properties;
-        if (top.layer.id === "earth-hotspots-circle") {
-          const kind = p.is_well_known ? "Well-Known Baseline" : "Novel Hotspot";
-          const key = `hs:${p.id}:${p.score_pct}`;
-          const html =
-            `<strong>${escapeHtml(p.name)}</strong><br/>` +
-            `${escapeHtml(p.country || kind)}<br/>` +
-            `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
-          showTooltip(key, html, e.point, "pointer");
-          return;
-        }
-        const key = `pin:${p.id}:${p.rank}:${p.score_pct}`;
-        const html =
-          `<strong>#${escapeHtml(p.rank)} ${escapeHtml(p.name)}</strong><br/>` +
-          `${escapeHtml(p.country)} · Top H3 Region<br/>` +
-          `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
-        showTooltip(key, html, e.point, "pointer");
-        return;
-      }
-
-      let props = null;
-      if (typeof window !== "undefined" && window.h3?.latLngToCell && e.lngLat) {
-        const h3Id = window.h3.latLngToCell(e.lngLat.lat, normalizeLon180(e.lngLat.lng), 4);
-        props = getSitePropsById().get(h3Id) || null;
-      } else {
-        const h3Hits = map.queryRenderedFeatures(e.point, { layers: ["earth-h3-fill"] });
-        props = h3Hits.length ? h3Hits[0].properties : null;
-      }
-
-      if (!props) {
-        hideTooltip();
-        return;
-      }
-
-      const val = state.cellDisplayValues[props.id] ?? -999999;
-      const isRaw = state.activeLayer.startsWith("raw:");
-      const cutoff = isRaw ? -99999 : state.minScoreFilter;
-
-      if (!isRaw && state.excludeWellKnown && props.is_well_known) {
-        const key = `excl:${props.id}`;
-        const html =
-          `<strong>${escapeHtml(props.country || props.name)}</strong><br/>` +
-          `Excluded Baseline Region`;
-        showTooltip(key, html, e.point, "");
-        return;
-      }
-
-      if (val <= -99999 || val < cutoff) {
-        hideTooltip();
-        return;
-      }
-
-      let unitLabel = "%";
-      if (isRaw) {
-        const param = state.metadata.parameters.find((pm) => pm.id === state.activeLayer.slice(4));
-        unitLabel = param ? ` ${param.unit}` : "";
-      }
-      const place = props.country && props.country !== props.region
-        ? `${props.country} (${props.region})`
-        : props.region;
-      const formattedVal = Number(val).toFixed(1);
-      const key = `h3:${props.id}:${formattedVal}:${unitLabel}`;
-      const html =
-        `<strong>${escapeHtml(props.name)}</strong><br/>` +
-        `${escapeHtml(place)}<br/>` +
-        `Value: <b>${escapeHtml(formattedVal)}${escapeHtml(unitLabel)}</b>`;
-      showTooltip(key, html, e.point, "pointer");
-    };
-
-    map.on("mousedown", hideTooltip);
-    map.on("dragstart", hideTooltip);
-    map.on("movestart", hideTooltip);
-    map.on("mouseout", hideTooltip);
-    map.on("resize", () => {
-      cachedStageW = mapContainer.clientWidth || 800;
-      cachedStageH = mapContainer.clientHeight || 600;
-    });
-
-    map.on("mousemove", (e) => {
-      if (state.pointerDown || map.isMoving()) {
-        hideTooltip();
-        return;
-      }
-      pendingHoverEvent = e;
-      if (!hoverRafId) {
-        hoverRafId = requestAnimationFrame(processHoverFrame);
-      }
-    });
-
-    map.on("click", (e) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: interactiveLayers });
-      if (!hits.length) return;
-      const top = hits[0];
-      if (top.layer.id === "earth-hotspots-circle" || top.layer.id === "earth-top-h3-pin") {
-        onInspectSite(top.properties.id);
-        return;
-      }
-      const id = top.properties.id;
-      const val = state.cellDisplayValues[id] ?? -999999;
-      if (val > -99999) {
-        onInspectSite(id);
-      }
-    });
-
-    state.mapReady = true;
-    highlightSelectedSiteOnMap(state.selectedSiteId);
-    updateEarthMapLayers(true);
+  mapCanvas.addEventListener("mouseleave", hideTooltip);
+  window.addEventListener("resize", () => {
+    cachedStageW = mapContainer.clientWidth || 800;
+    cachedStageH = mapContainer.clientHeight || 600;
   });
 
-  state.map = map;
+  state.map = viewer;
+  state.mapReady = true;
+  applyBasemap(state.basemap);
+  setViewerProjection(viewer, state.isGlobe);
+  startBuildingH3FillPrimitives();
+  highlightSelectedSiteOnMap(state.selectedSiteId);
+  updateEarthMapLayers(true);
+  requestAutoSpinFrame();
 }
 
 export function resizeEarthMap() {
-  state.map?.resize();
+  if (_viewer && !_viewer.isDestroyed()) {
+    _viewer.resize();
+  }
 }
 
 export function applyBasemap(basemapId) {
   state.basemap = basemapId;
-  if (!state.map) return;
+  if (!_viewer || _viewer.isDestroyed() || !_blueMarbleLayer || !_modisLayer) return;
   const useDark = basemapId === "dark_vector";
   const useModis = basemapId === "gibs_modis";
-  state.map.setLayoutProperty("gibs_bluemarble", "visibility", useModis ? "none" : "visible");
-  state.map.setPaintProperty("gibs_bluemarble", "raster-brightness-max", useDark ? 0.22 : 1.0);
-  state.map.setPaintProperty("gibs_bluemarble", "raster-saturation", useDark ? -0.95 : 0.0);
-  state.map.setPaintProperty("gibs_bluemarble", "raster-opacity", useDark ? 0.88 : 1.0);
-  state.map.setLayoutProperty("gibs_modis", "visibility", useModis ? "visible" : "none");
+
+  _blueMarbleLayer.show = !useModis;
+  _blueMarbleLayer.brightness = useDark ? 0.25 : 1.0;
+  _blueMarbleLayer.saturation = useDark ? 0.08 : 1.0;
+  _blueMarbleLayer.alpha = useDark ? 0.88 : 1.0;
+  _modisLayer.show = useModis;
 }
 
-let _spinRafId = 0;
-let _spinLastTime = 0;
-let _spinListenersBound = false;
-
-function shouldSpinEarth() {
-  return Boolean(
-    !document.hidden &&
-      state.map &&
-      state.isGlobe &&
-      state.autoSpin &&
-      !state.userInteracting &&
-      !state.pointerDown &&
-      state.map.getZoom() < 2.8
-  );
-}
-
-function spinStep(now) {
-  _spinRafId = 0;
-  if (!shouldSpinEarth()) return;
-  const dt = Math.min(0.1, (now - _spinLastTime) / 1000.0);
-  _spinLastTime = now;
-  const center = state.map.getCenter();
-  center.lng = ((center.lng + dt * 2.4 + 180) % 360) - 180;
-  state.map.setCenter(center);
-  _spinRafId = requestAnimationFrame(spinStep);
-}
+const _spinController = createAutoSpinController({
+  getViewer: () => _viewer,
+  shouldSpin: () =>
+    Boolean(
+      !document.hidden &&
+        _viewer &&
+        !_viewer.isDestroyed() &&
+        state.isGlobe &&
+        state.autoSpin &&
+        !state.userInteracting &&
+        !state.pointerDown &&
+        cameraHeightToApproxZoom(_viewer) < 2.8,
+    ),
+  rateDegPerSec: 2.4,
+});
 
 export function requestAutoSpinFrame() {
-  if (!_spinRafId && shouldSpinEarth()) {
-    _spinLastTime = performance.now();
-    _spinRafId = requestAnimationFrame(spinStep);
-  }
+  _spinController.requestFrame();
 }
 
 export function startAutoSpinLoop() {
-  if (!_spinListenersBound && typeof document !== "undefined") {
-    _spinListenersBound = true;
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) requestAutoSpinFrame();
-    });
-  }
-  requestAutoSpinFrame();
+  _spinController.start();
 }
 
 async function ensureRawParameterLoaded(paramId) {
@@ -638,28 +864,166 @@ async function ensureRawParameterLoaded(paramId) {
   return state.rawParamCache[paramId];
 }
 
-export function updateEarthHexOpacity() {
-  if (!state.map || !state.mapReady || !state.map.getLayer("earth-h3-fill")) {
-    return;
+function applyAllCellColors({ isScoreLayer, effectiveCutoff, minVal, maxVal, dimWellKnown }) {
+  const lut = getPaletteLut(state.palette);
+  const invSpan = 1.0 / Math.max(1e-6, maxVal - minVal);
+  const isLogScale = state.scaleMode === "log";
+  const hexOpacity = state.hexOpacity;
+  const tmp = new Uint8Array(4);
+
+  for (const feat of state.earthGeojson.features) {
+    const id = feat.properties.id;
+    const val = state.cellDisplayValues[id] ?? -999999;
+    writeCellRgbaBytes(tmp, {
+      val,
+      isWellKnown: Boolean(feat.properties.is_well_known),
+      isScoreLayer,
+      effectiveCutoff,
+      hexOpacity,
+      minVal,
+      maxVal,
+      invSpan,
+      lut,
+      isLogScale,
+      dimWellKnown,
+    });
+
+    let cached = _rgbaById.get(id);
+    if (!cached) {
+      cached = new Uint8Array(4);
+      _rgbaById.set(id, cached);
+    }
+    if (
+      cached[0] === tmp[0] &&
+      cached[1] === tmp[1] &&
+      cached[2] === tmp[2] &&
+      cached[3] === tmp[3]
+    ) {
+      continue;
+    }
+    cached[0] = tmp[0];
+    cached[1] = tmp[1];
+    cached[2] = tmp[2];
+    cached[3] = tmp[3];
+
+    const entries = _cellInstById.get(id);
+    if (entries) {
+      for (const { prim, instId } of entries) {
+        if (prim.ready) {
+          const attrs = prim.getGeometryInstanceAttributes(instId);
+          if (attrs) {
+            attrs.color = cached;
+          } else {
+            _dirtyColorSync = true;
+          }
+        } else {
+          _dirtyColorSync = true;
+        }
+      }
+    } else {
+      _dirtyColorSync = true;
+    }
   }
+}
+
+export function updateEarthHexOpacity() {
+  if (!_viewer || _viewer.isDestroyed() || !state.mapReady || !state.earthGeojson) return;
   const isScoreLayer = !state.activeLayer.startsWith("raw:");
   const effectiveCutoff = isScoreLayer ? state.minScoreFilter : -99999;
-  const valExpr = ["coalesce", ["feature-state", "display_val"], -999999];
   const dimWellKnown = isScoreLayer && state.excludeWellKnown;
-  const opacityExpr = buildFillOpacityExpression({
-    valExpr,
+  applyAllCellColors({
     isScoreLayer,
     effectiveCutoff,
-    hexOpacity: state.hexOpacity,
     minVal: _lastColorRange.minVal,
     maxVal: _lastColorRange.maxVal,
     dimWellKnown,
   });
-  state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);
+}
+
+function updatePinCollections({ topH3Results, hotspotResults, minPinScore }) {
+  if (!_viewer || _viewer.isDestroyed() || !_topH3Billboards || !_hotspotBillboards) return;
+  const Cesium = window.Cesium;
+  const imgs = getPinImages();
+
+  _topH3Billboards.removeAll();
+  _topH3Labels.removeAll();
+  for (let idx = 0; idx < (topH3Results || []).length; idx++) {
+    const r = topH3Results[idx];
+    if (r.overall_score * 100 < minPinScore) continue;
+    const rank = idx + 1;
+    const scorePct = Math.round(r.overall_score * 100);
+    const isTop3 = rank <= 3;
+    const pos = Cesium.Cartesian3.fromDegrees(r.site.lon, r.site.lat, PIN_HEIGHT_M);
+    const props = {
+      id: r.site.id,
+      name: r.site.name,
+      country: r.site.country || r.site.region,
+      rank,
+      score: r.overall_score,
+      score_pct: scorePct,
+      is_top3: isTop3,
+    };
+    _topH3Billboards.add({
+      id: { kind: "top_h3", props },
+      position: pos,
+      image: isTop3 ? imgs.top3H3 : imgs.topKH3,
+    });
+    _topH3Labels.add({
+      id: { kind: "top_h3", props },
+      position: pos,
+      text: `#${rank} ${shortPinTitle(r.site.name)} (${scorePct}%)`,
+      font: "600 11px system-ui, -apple-system, sans-serif",
+      fillColor: Cesium.Color.fromCssColorString("#ecfeff"),
+      outlineColor: Cesium.Color.fromCssColorString("#040812"),
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      pixelOffset: new Cesium.Cartesian2(0, -14),
+      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2.5e7),
+    });
+  }
+
+  _hotspotBillboards.removeAll();
+  _hotspotLabels.removeAll();
+  if (state.showHotspots) {
+    for (let idx = 0; idx < (hotspotResults || []).length; idx++) {
+      const r = hotspotResults[idx];
+      if (r.overall_score * 100 < minPinScore) continue;
+      const scorePct = Math.round(r.overall_score * 100);
+      const pos = Cesium.Cartesian3.fromDegrees(r.site.lon, r.site.lat, PIN_HEIGHT_M);
+      const props = {
+        id: r.site.id,
+        name: r.site.name,
+        country: r.site.country || r.site.region,
+        rank: idx + 1,
+        is_well_known: r.site.is_well_known,
+        score: r.overall_score,
+        score_pct: scorePct,
+      };
+      _hotspotBillboards.add({
+        id: { kind: "hotspot", props },
+        position: pos,
+        image: r.site.is_well_known ? imgs.hsWellKnown : imgs.hsNovel,
+      });
+      _hotspotLabels.add({
+        id: { kind: "hotspot", props },
+        position: pos,
+        text: `${shortPinTitle(r.site.name)} (${scorePct}%)`,
+        font: "500 10.5px system-ui, -apple-system, sans-serif",
+        fillColor: Cesium.Color.fromCssColorString(r.site.is_well_known ? "#fde68a" : "#bae6fd"),
+        outlineColor: Cesium.Color.fromCssColorString("#040812"),
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        verticalOrigin: Cesium.VerticalOrigin.TOP,
+        pixelOffset: new Cesium.Cartesian2(0, 12),
+        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.6e7),
+      });
+    }
+  }
 }
 
 export async function updateEarthMapLayers(updateData = true) {
-  if (!state.map || !state.mapReady || !state.map.getLayer("earth-h3-fill") || !state.lastRankResponse) {
+  if (!_viewer || _viewer.isDestroyed() || !state.mapReady || !state.lastRankResponse) {
     return;
   }
 
@@ -709,10 +1073,6 @@ export async function updateEarthMapLayers(updateData = true) {
         }
       }
       state.cellDisplayValues[id] = val;
-      if (_pushedDisplayVals.get(id) !== val) {
-        _pushedDisplayVals.set(id, val);
-        state.map.setFeatureState({ source: "earth-h3", id }, { display_val: val });
-      }
     }
     _displayDataVersion += 1;
   }
@@ -745,100 +1105,19 @@ export async function updateEarthMapLayers(updateData = true) {
     scaleMode: state.scaleMode,
   });
 
-  const paletteStops = PALETTES[state.palette] || PALETTES.bioluminescent;
-  const valExpr = ["coalesce", ["feature-state", "display_val"], -999999];
   const dimWellKnown = isScoreLayer && state.excludeWellKnown;
-
-  const colorExpr = buildFillColorExpression({
-    valExpr,
-    effectiveCutoff,
-    paletteStops,
-    minVal,
-    maxVal,
-    scaleMode: state.scaleMode,
-    dimWellKnown,
-  });
-  const opacityExpr = buildFillOpacityExpression({
-    valExpr,
+  applyAllCellColors({
     isScoreLayer,
     effectiveCutoff,
-    hexOpacity: state.hexOpacity,
     minVal,
     maxVal,
     dimWellKnown,
   });
-  const outlineOpacityExpr = buildOutlineOpacityExpression({
-    isScoreLayer,
-  });
-  const outlineColorExpr = buildOutlineColorExpression({
-    valExpr,
-    isScoreLayer,
-    effectiveCutoff,
-  });
-
-  state.map.setPaintProperty("earth-h3-fill", "fill-color", colorExpr);
-  state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);
-  state.map.setPaintProperty("earth-h3-outline", "line-color", outlineColorExpr);
-  state.map.setPaintProperty("earth-h3-outline", "line-opacity", outlineOpacityExpr);
 
   const minPinScore = isScoreLayer ? state.minScoreFilter : 0;
-
-  // Update Top-K H3 region pins
-  const h3Features = (top_h3_results || [])
-    .filter((r) => r.overall_score * 100 >= minPinScore)
-    .map((r) => {
-      const scorePct = Math.round(r.overall_score * 100);
-      return {
-        type: "Feature",
-        properties: {
-          id: r.site.id,
-          name: r.site.name,
-          country: r.site.country || r.site.region,
-          rank: r.rank,
-          score: r.overall_score,
-          score_pct: scorePct,
-          is_top3: r.rank <= 3,
-          label: `#${r.rank} ${shortPinTitle(r.site.name)} (${scorePct}%)`,
-        },
-        geometry: {
-          type: "Point",
-          coordinates: [r.site.lon, r.site.lat],
-        },
-      };
-    });
-  state.map.getSource("earth-top-h3")?.setData({
-    type: "FeatureCollection",
-    features: h3Features,
-  });
-
-  // Update Named Hotspot markers (respecting Min Score Spotlight & toggle)
-  const hsFeatures = state.showHotspots
-    ? (hotspot_results || [])
-        .filter((r) => r.overall_score * 100 >= minPinScore)
-        .map((r, idx) => {
-          const scorePct = Math.round(r.overall_score * 100);
-          return {
-            type: "Feature",
-            properties: {
-              id: r.site.id,
-              name: r.site.name,
-              country: r.site.country || r.site.region,
-              rank: idx + 1,
-              is_well_known: r.site.is_well_known,
-              score: r.overall_score,
-              score_pct: scorePct,
-              label: `${shortPinTitle(r.site.name)} (${scorePct}%)`,
-            },
-            geometry: {
-              type: "Point",
-              coordinates: [r.site.lon, r.site.lat],
-            },
-          };
-        })
-    : [];
-
-  state.map.getSource("earth-hotspots")?.setData({
-    type: "FeatureCollection",
-    features: hsFeatures,
+  updatePinCollections({
+    topH3Results: top_h3_results,
+    hotspotResults: hotspot_results,
+    minPinScore,
   });
 }

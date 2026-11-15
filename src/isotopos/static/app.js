@@ -26,11 +26,14 @@ import {
   initEarthMap,
   populateLayerSwitcher,
   requestAutoSpinFrame,
+  resetEarthGlobeView,
   resizeEarthMap,
+  setEarthProjection,
   startAutoSpinLoop,
   updateEarthHexOpacity,
   updateEarthMapLayers,
   updateLegendGradient,
+  zoomEarthGlobe,
 } from "./js/components/globe_map.js";
 import { initStarfield } from "./js/components/starfield.js";
 import {
@@ -219,11 +222,19 @@ function bindUIEvents() {
   });
 
   document.getElementById("btn-toggle-projection").addEventListener("click", (e) => {
-    state.isGlobe = !state.isGlobe;
-    state.map?.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
+    setEarthProjection(!state.isGlobe);
     e.target.textContent = state.isGlobe ? "3D Globe: ON" : "2D Map: ON";
     e.target.setAttribute("aria-pressed", state.isGlobe ? "true" : "false");
-    requestAutoSpinFrame();
+  });
+
+  document.getElementById("earth-zoom-in")?.addEventListener("click", () => {
+    zoomEarthGlobe(1.55);
+  });
+  document.getElementById("earth-zoom-out")?.addEventListener("click", () => {
+    zoomEarthGlobe(1 / 1.55);
+  });
+  document.getElementById("earth-zoom-reset")?.addEventListener("click", () => {
+    resetEarthGlobeView();
   });
 
   bindTargetPanelEvents({
@@ -335,7 +346,7 @@ async function init() {
   });
 
   try {
-    setLoadingOverlay("Loading spatial grid & 87,815 H3 cells…", true);
+    setLoadingOverlay("Loading spatial grid & H3 Res 4 cells…", true);
     const [meta, geo] = await Promise.all([fetchMetadata(), fetchEarthGrid()]);
     state.metadata = meta;
     state.earthGeojson = geo;

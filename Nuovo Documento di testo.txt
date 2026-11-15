@@ -1,5 +1,0 @@
-1 seleziono un luogo sulla luna o marte
-2 raccolgo i parametri su quel luogo basandomi su i dati forniti dalle osservazioni nasa della superficie 
-3 in base all'obiettivo della missione selezioni i parametri che devono avere un peso maggiore sulla valutazione 
-4 valuto, in base all'importanza e alla somiglianza a questi dati, una serie di siti terrestri restituendo una somiglianza in percentuale 
-5 infine fornisco la soluzione più simile

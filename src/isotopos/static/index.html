@@ -8,9 +8,10 @@
   <link rel="preconnect" href="https://unpkg.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="preconnect" href="https://gibs.earthdata.nasa.gov" crossorigin />
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="https://unpkg.com/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" />
   <link rel="stylesheet" href="/static/styles.css" />
-  <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+  <script>window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.123.0/Build/Cesium/";</script>
+  <script src="https://unpkg.com/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
   <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
@@ -303,10 +304,17 @@
         </section>
       </div>
 
-      <!-- Top-Right Reopen Pill (Clears MapLibre NavigationControl) -->
+      <!-- Top-Right Reopen Pill (Clears zoom controls) -->
       <button id="btn-expand-right" class="floating-expand-pill right-expand-pill hidden" type="button" title="Show Analog Results">
         Analogs ◀
       </button>
+
+      <!-- Top-Right Globe Zoom Controls -->
+      <div class="map-zoom-controls" role="group" aria-label="Globe zoom controls">
+        <button id="earth-zoom-in" type="button" class="map-zoom-btn" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="earth-zoom-out" type="button" class="map-zoom-btn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        <button id="earth-zoom-reset" type="button" class="map-zoom-btn map-zoom-btn-reset" title="Reset view" aria-label="Reset view">&#8634;</button>
+      </div>
 
       <!-- Dynamic Color Legend (Open by default, collapsible) -->
       <section class="map-overlay-card bottom-left-overlay collapsible-menu" data-collapse-id="globe-legend" data-collapse-default="open">

@@ -5,10 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <title>iso-topos — 3D Moon &amp; Mars Target Explorer</title>
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css" />
+  <link rel="preconnect" href="https://unpkg.com" crossorigin />
+  <link rel="stylesheet" href="https://unpkg.com/cesium@1.123.0/Build/Cesium/Widgets/widgets.css" />
   <link rel="stylesheet" href="/static/styles.css" />
   <link rel="stylesheet" href="/static/styles/planetary.css" />
-  <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+  <script>window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.123.0/Build/Cesium/";</script>
+  <script src="https://unpkg.com/cesium@1.123.0/Build/Cesium/Cesium.js"></script>
 </head>
 <body>
   <a href="#planetary-stage" class="skip-link">Skip to planetary globe</a>
@@ -44,6 +46,12 @@
     <section id="planetary-stage" class="planetary-stage" tabindex="-1" aria-label="Interactive Planetary Globe">
       <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
       <div id="planetary-map" role="region" aria-label="Interactive 3D Moon and Mars Globe"></div>
+
+      <div class="map-zoom-controls" role="group" aria-label="Planetary globe zoom controls">
+        <button id="pl-zoom-in" type="button" class="map-zoom-btn" title="Zoom in" aria-label="Zoom in">+</button>
+        <button id="pl-zoom-out" type="button" class="map-zoom-btn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+        <button id="pl-zoom-reset" type="button" class="map-zoom-btn map-zoom-btn-reset" title="Reset view" aria-label="Reset view">&#8634;</button>
+      </div>
 
       <div id="pl-cursor-pill" class="planetary-cursor-pill">
         Click globe or mission pin to sample NASA/PDS grid — hover for live coordinates

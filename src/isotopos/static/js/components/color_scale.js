@@ -1,8 +1,10 @@
-// Scientific color palette scaling, legend formatting, and MapLibre paint expression builders
+// Scientific color palette scaling, legend formatting, and RGBA LUT helpers
 
 import { PALETTES, state } from "../state.js";
 
 const LOG_SCALE_K = 50.0;
+const INV_LOG_1_PLUS_K = 1.0 / Math.log(1.0 + LOG_SCALE_K);
+const _paletteLutCache = new Map();
 
 export function normalizeLon180(lon) {
   return ((((lon + 180) % 360) + 360) % 360) - 180;
@@ -207,122 +209,83 @@ export function updateLegendLabels({
   }
 }
 
-export function buildFillColorExpression({
-  valExpr,
-  effectiveCutoff,
-  paletteStops,
-  minVal,
-  maxVal,
-  scaleMode = "auto",
-  dimWellKnown = false,
-}) {
-  const span = Math.max(1e-6, maxVal - minVal);
-  const mappedStops = [];
-  for (const [t, col] of paletteStops) {
-    const x =
-      scaleMode === "log"
-        ? (Math.pow(1 + LOG_SCALE_K, t) - 1) / LOG_SCALE_K
-        : t;
-    const v = minVal + x * span;
-    if (!mappedStops.length || v > mappedStops[mappedStops.length - 2] + 1e-6) {
-      mappedStops.push(v, col);
+export function getPaletteLut(paletteName) {
+  let lut = _paletteLutCache.get(paletteName);
+  if (!lut) {
+    const stops = PALETTES[paletteName] || PALETTES.bioluminescent;
+    lut = new Uint8Array(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      const [r, g, b] = samplePaletteRgb(stops, i / 255);
+      const base = i * 3;
+      lut[base] = r;
+      lut[base + 1] = g;
+      lut[base + 2] = b;
     }
+    _paletteLutCache.set(paletteName, lut);
   }
-
-  const rampExpr = ["interpolate", ["linear"], valExpr, ...mappedStops];
-  if (dimWellKnown) {
-    return [
-      "case",
-      ["boolean", ["get", "is_well_known"], false],
-      "#1e293b",
-      ["<", valExpr, effectiveCutoff],
-      "rgba(15, 23, 42, 0.0)",
-      rampExpr,
-    ];
-  }
-
-  return [
-    "case",
-    ["<", valExpr, effectiveCutoff],
-    "rgba(15, 23, 42, 0.0)",
-    rampExpr,
-  ];
+  return lut;
 }
 
-export function buildFillOpacityExpression({
-  valExpr,
-  isScoreLayer,
-  effectiveCutoff,
-  hexOpacity,
-  minVal,
-  maxVal,
-  dimWellKnown = false,
-}) {
+export function writeCellRgbaBytes(
+  outRgba,
+  {
+    val,
+    isWellKnown = false,
+    isScoreLayer = true,
+    effectiveCutoff = 0,
+    hexOpacity = 0.82,
+    minVal = 0,
+    maxVal = 100,
+    invSpan = 0.01,
+    lut,
+    isLogScale = false,
+    dimWellKnown = false,
+  },
+) {
+  if (isScoreLayer) {
+    if (dimWellKnown && isWellKnown) {
+      outRgba[0] = 30;
+      outRgba[1] = 41;
+      outRgba[2] = 59;
+      outRgba[3] = 87;
+      return;
+    }
+    if (val <= -99999 || val < effectiveCutoff) {
+      outRgba[0] = 15;
+      outRgba[1] = 23;
+      outRgba[2] = 42;
+      outRgba[3] = 0;
+      return;
+    }
+  } else if (val <= -99999) {
+    outRgba[0] = 15;
+    outRgba[1] = 23;
+    outRgba[2] = 42;
+    outRgba[3] = 0;
+    return;
+  }
+
+  const rawU = (val - minVal) * invSpan;
+  const u = rawU <= 0 ? 0 : rawU >= 1 ? 1 : rawU;
+  const t = isLogScale ? Math.log(1.0 + LOG_SCALE_K * u) * INV_LOG_1_PLUS_K : u;
+  const lutBase = ((t * 255 + 0.5) | 0) * 3;
+
+  outRgba[0] = lut[lutBase];
+  outRgba[1] = lut[lutBase + 1];
+  outRgba[2] = lut[lutBase + 2];
+
   if (!isScoreLayer) {
-    return [
-      "case",
-      ["<=", valExpr, -99999],
-      0.0,
-      Number((hexOpacity * 0.88).toFixed(3)),
-    ];
+    outRgba[3] = Math.round(hexOpacity * 0.88 * 255);
+    return;
   }
 
-  const span = Math.max(1e-6, maxVal - minVal);
-  const sLow = minVal;
-  const sMid = minVal + 0.45 * span;
-  const sHigh = minVal + 0.78 * span;
-
-  const rampOpacity = [
-    "interpolate",
-    ["linear"],
-    valExpr,
-    sLow,
-    Number((hexOpacity * 0.46).toFixed(3)),
-    sMid,
-    Number((hexOpacity * 0.76).toFixed(3)),
-    sHigh,
-    Number((hexOpacity * 0.94).toFixed(3)),
-    maxVal,
-    Number(hexOpacity.toFixed(3)),
-  ];
-
-  if (dimWellKnown) {
-    return [
-      "case",
-      ["boolean", ["get", "is_well_known"], false],
-      0.34,
-      ["<", valExpr, effectiveCutoff],
-      0.0,
-      rampOpacity,
-    ];
+  let opFactor;
+  if (u <= 0.45) {
+    opFactor = 0.46 + ((0.76 - 0.46) * u) / 0.45;
+  } else if (u <= 0.78) {
+    opFactor = 0.76 + ((0.94 - 0.76) * (u - 0.45)) / 0.33;
+  } else {
+    opFactor = 0.94 + ((1.0 - 0.94) * (u - 0.78)) / 0.22;
   }
-
-  return [
-    "case",
-    ["<", valExpr, effectiveCutoff],
-    0.0,
-    rampOpacity,
-  ];
-}
-
-export function buildOutlineOpacityExpression({ isScoreLayer = true }) {
-  const midOp = isScoreLayer ? 0.18 : 0.16;
-  const highOp = isScoreLayer ? 0.45 : 0.42;
-  // Keep ["zoom"] top-level without data/feature-state sub-expressions in zoom stops
-  return [
-    "interpolate",
-    ["linear"],
-    ["zoom"],
-    2.2,
-    0.0,
-    3.3,
-    midOp,
-    5.2,
-    highOp,
-  ];
-}
-
-export function buildOutlineColorExpression({ valExpr, isScoreLayer = true, effectiveCutoff }) {
-  const hiddenCond = isScoreLayer ? ["<", valExpr, effectiveCutoff] : ["<=", valExpr, -99999];
-  return ["case", hiddenCond, "rgba(0, 0, 0, 0)", "rgba(226, 232, 240, 0.55)"];
+  outRgba[3] = Math.round(hexOpacity * opFactor * 255);
 }

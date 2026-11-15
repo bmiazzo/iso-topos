@@ -201,6 +201,7 @@ def test_frontend_static_modules_and_collapsible_shell_served():
         "/static/js/ui/collapsible.js",
         "/static/js/ui/menu_summaries.js",
         "/static/js/components/starfield.js",
+        "/static/js/components/cesium_helpers.js",
         "/static/js/components/color_scale.js",
         "/static/js/components/globe_map.js",
         "/static/js/components/target_panel.js",
