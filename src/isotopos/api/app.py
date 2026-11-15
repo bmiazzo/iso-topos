@@ -82,18 +82,27 @@ def create_app(
         cache_key: str,
         payload_fn: Callable[[], Any],
     ) -> Response:
-        raw_bytes, gz_bytes = active_store.get_cached_json_payload(cache_key, payload_fn)
+        raw_bytes, gz_bytes, etag = active_store.get_cached_json_with_etag(cache_key, payload_fn)
+        base_headers = {
+            "Cache-Control": "public, max-age=3600",
+            "ETag": etag,
+            "Vary": "Accept-Encoding",
+        }
+        if_none_match = request.headers.get("if-none-match", "").strip()
+        if if_none_match and (if_none_match == etag or if_none_match == f"W/{etag}"):
+            return Response(status_code=304, headers=base_headers)
+
         accept_encoding = request.headers.get("accept-encoding", "")
         if "gzip" in accept_encoding.lower():
             return Response(
                 content=gz_bytes,
                 media_type="application/json",
-                headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"},
+                headers={**base_headers, "Content-Encoding": "gzip"},
             )
         return Response(
             content=raw_bytes,
             media_type="application/json",
-            headers={"Vary": "Accept-Encoding"},
+            headers=base_headers,
         )
 
     @application.get("/api/v1/metadata")

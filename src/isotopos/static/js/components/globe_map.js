@@ -9,6 +9,7 @@ import {
   buildOutlineColorExpression,
   buildOutlineOpacityExpression,
   computeLayerColorRange,
+  normalizeLon180,
   updateLegendGradient,
   updateLegendLabels,
 } from "./color_scale.js";
@@ -22,15 +23,21 @@ function shortPinTitle(name) {
 
 let _cachedGeojsonRef = null;
 let _siteCoordsById = new Map();
+let _sitePropsById = new Map();
+let _pushedDisplayVals = new Map();
 
-function getSiteCoordsById() {
+function ensureGeojsonIndexes() {
   if (_cachedGeojsonRef !== state.earthGeojson) {
     _cachedGeojsonRef = state.earthGeojson;
     _siteCoordsById = new Map();
+    _sitePropsById = new Map();
+    _pushedDisplayVals = new Map();
     for (const f of state.earthGeojson?.features || []) {
       const id = f?.properties?.id;
-      const geom = f?.geometry;
-      if (!id || !geom?.coordinates) continue;
+      if (!id) continue;
+      _sitePropsById.set(id, f.properties);
+      const geom = f.geometry;
+      if (!geom?.coordinates) continue;
       // Support both Polygon (coordinates[0]) and antimeridian MultiPolygon (coordinates[0][0])
       const ring = geom.type === "MultiPolygon" ? geom.coordinates[0]?.[0] : geom.coordinates[0];
       if (!ring?.length) continue;
@@ -43,7 +50,16 @@ function getSiteCoordsById() {
       _siteCoordsById.set(id, [sx / ring.length, sy / ring.length]);
     }
   }
+}
+
+function getSiteCoordsById() {
+  ensureGeojsonIndexes();
   return _siteCoordsById;
+}
+
+function getSitePropsById() {
+  ensureGeojsonIndexes();
+  return _sitePropsById;
 }
 
 function resolveSiteCoords(siteId, explicitCoords) {
@@ -87,15 +103,10 @@ export function populateLayerSwitcher() {
   sel.appendChild(rawGroup);
 }
 
-function positionTooltipWithinStage(tooltipEl, mapEl, point) {
-  const stageW = mapEl.clientWidth || 800;
-  const stageH = mapEl.clientHeight || 600;
-  const tipW = tooltipEl.offsetWidth || 210;
-  const tipH = tooltipEl.offsetHeight || 64;
+function positionTooltipWithinStage(tooltipEl, stageW, stageH, tipW, tipH, point) {
   const left = Math.max(8, Math.min(stageW - tipW - 8, point.x + 14));
   const top = Math.max(8, Math.min(stageH - tipH - 8, point.y + 14));
-  tooltipEl.style.left = `${left}px`;
-  tooltipEl.style.top = `${top}px`;
+  tooltipEl.style.transform = `translate3d(${left}px, ${top}px, 0)`;
 }
 
 export function highlightSelectedSiteOnMap(siteId, explicitCoords = null) {
@@ -389,64 +400,116 @@ export function initEarthMap({ onInspectSite }) {
 
     const tooltip = document.getElementById("hover-tooltip");
     const mapContainer = map.getContainer();
+    const mapCanvas = map.getCanvas();
+    const pinLayers = ["earth-hotspots-circle", "earth-top-h3-pin"];
     const interactiveLayers = ["earth-hotspots-circle", "earth-top-h3-pin", "earth-h3-fill"];
 
-    map.on("mousemove", (e) => {
-      const hits = map.queryRenderedFeatures(e.point, { layers: interactiveLayers });
-      if (!hits.length) {
-        map.getCanvas().style.cursor = "";
+    let hoverRafId = 0;
+    let pendingHoverEvent = null;
+    let lastHoverKey = "";
+    let lastCursor = "";
+    let cachedTipW = 210;
+    let cachedTipH = 64;
+    let cachedStageW = mapContainer.clientWidth || 800;
+    let cachedStageH = mapContainer.clientHeight || 600;
+
+    const setCursor = (cursor) => {
+      if (lastCursor !== cursor) {
+        lastCursor = cursor;
+        mapCanvas.style.cursor = cursor;
+      }
+    };
+
+    const hideTooltip = () => {
+      pendingHoverEvent = null;
+      if (hoverRafId) {
+        cancelAnimationFrame(hoverRafId);
+        hoverRafId = 0;
+      }
+      setCursor("");
+      if (lastHoverKey !== "") {
+        lastHoverKey = "";
         tooltip.classList.add("hidden");
-        return;
       }
+    };
 
-      const top = hits[0];
-      if (top.layer.id === "earth-hotspots-circle") {
-        const p = top.properties;
-        const kind = p.is_well_known ? "Well-Known Baseline" : "Novel Hotspot";
-        map.getCanvas().style.cursor = "pointer";
-        tooltip.innerHTML =
-          `<strong>${escapeHtml(p.name)}</strong><br/>` +
-          `${escapeHtml(p.country || kind)}<br/>` +
-          `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
+    const showTooltip = (key, html, point, cursor) => {
+      setCursor(cursor);
+      if (lastHoverKey !== key) {
+        lastHoverKey = key;
+        tooltip.innerHTML = html;
         tooltip.classList.remove("hidden");
-        positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        cachedTipW = tooltip.offsetWidth || 210;
+        cachedTipH = tooltip.offsetHeight || 64;
+        cachedStageW = mapContainer.clientWidth || 800;
+        cachedStageH = mapContainer.clientHeight || 600;
+      }
+      positionTooltipWithinStage(tooltip, cachedStageW, cachedStageH, cachedTipW, cachedTipH, point);
+    };
+
+    const processHoverFrame = () => {
+      hoverRafId = 0;
+      const e = pendingHoverEvent;
+      pendingHoverEvent = null;
+      if (!e || state.pointerDown || map.isMoving()) {
         return;
       }
 
-      if (top.layer.id === "earth-top-h3-pin") {
+      const pinHits = map.queryRenderedFeatures(e.point, { layers: pinLayers });
+      if (pinHits.length) {
+        const top = pinHits[0];
         const p = top.properties;
-        map.getCanvas().style.cursor = "pointer";
-        tooltip.innerHTML =
+        if (top.layer.id === "earth-hotspots-circle") {
+          const kind = p.is_well_known ? "Well-Known Baseline" : "Novel Hotspot";
+          const key = `hs:${p.id}:${p.score_pct}`;
+          const html =
+            `<strong>${escapeHtml(p.name)}</strong><br/>` +
+            `${escapeHtml(p.country || kind)}<br/>` +
+            `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
+          showTooltip(key, html, e.point, "pointer");
+          return;
+        }
+        const key = `pin:${p.id}:${p.rank}:${p.score_pct}`;
+        const html =
           `<strong>#${escapeHtml(p.rank)} ${escapeHtml(p.name)}</strong><br/>` +
           `${escapeHtml(p.country)} · Top H3 Region<br/>` +
           `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
-        tooltip.classList.remove("hidden");
-        positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        showTooltip(key, html, e.point, "pointer");
         return;
       }
 
-      const props = top.properties;
-      const val = state.cellDisplayValues[props.id] ?? top.state?.display_val ?? -999999;
+      let props = null;
+      if (typeof window !== "undefined" && window.h3?.latLngToCell && e.lngLat) {
+        const h3Id = window.h3.latLngToCell(e.lngLat.lat, normalizeLon180(e.lngLat.lng), 4);
+        props = getSitePropsById().get(h3Id) || null;
+      } else {
+        const h3Hits = map.queryRenderedFeatures(e.point, { layers: ["earth-h3-fill"] });
+        props = h3Hits.length ? h3Hits[0].properties : null;
+      }
+
+      if (!props) {
+        hideTooltip();
+        return;
+      }
+
+      const val = state.cellDisplayValues[props.id] ?? -999999;
       const isRaw = state.activeLayer.startsWith("raw:");
       const cutoff = isRaw ? -99999 : state.minScoreFilter;
 
       if (!isRaw && state.excludeWellKnown && props.is_well_known) {
-        map.getCanvas().style.cursor = "";
-        tooltip.innerHTML =
+        const key = `excl:${props.id}`;
+        const html =
           `<strong>${escapeHtml(props.country || props.name)}</strong><br/>` +
           `Excluded Baseline Region`;
-        tooltip.classList.remove("hidden");
-        positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        showTooltip(key, html, e.point, "");
         return;
       }
 
       if (val <= -99999 || val < cutoff) {
-        map.getCanvas().style.cursor = "";
-        tooltip.classList.add("hidden");
+        hideTooltip();
         return;
       }
 
-      map.getCanvas().style.cursor = "pointer";
       let unitLabel = "%";
       if (isRaw) {
         const param = state.metadata.parameters.find((pm) => pm.id === state.activeLayer.slice(4));
@@ -455,17 +518,33 @@ export function initEarthMap({ onInspectSite }) {
       const place = props.country && props.country !== props.region
         ? `${props.country} (${props.region})`
         : props.region;
-      tooltip.innerHTML =
+      const formattedVal = Number(val).toFixed(1);
+      const key = `h3:${props.id}:${formattedVal}:${unitLabel}`;
+      const html =
         `<strong>${escapeHtml(props.name)}</strong><br/>` +
         `${escapeHtml(place)}<br/>` +
-        `Value: <b>${escapeHtml(Number(val).toFixed(1))}${escapeHtml(unitLabel)}</b>`;
-      tooltip.classList.remove("hidden");
-      positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        `Value: <b>${escapeHtml(formattedVal)}${escapeHtml(unitLabel)}</b>`;
+      showTooltip(key, html, e.point, "pointer");
+    };
+
+    map.on("mousedown", hideTooltip);
+    map.on("dragstart", hideTooltip);
+    map.on("movestart", hideTooltip);
+    map.on("mouseout", hideTooltip);
+    map.on("resize", () => {
+      cachedStageW = mapContainer.clientWidth || 800;
+      cachedStageH = mapContainer.clientHeight || 600;
     });
 
-    map.on("mouseleave", "earth-h3-fill", () => {
-      map.getCanvas().style.cursor = "";
-      tooltip.classList.add("hidden");
+    map.on("mousemove", (e) => {
+      if (state.pointerDown || map.isMoving()) {
+        hideTooltip();
+        return;
+      }
+      pendingHoverEvent = e;
+      if (!hoverRafId) {
+        hoverRafId = requestAnimationFrame(processHoverFrame);
+      }
     });
 
     map.on("click", (e) => {
@@ -608,7 +687,10 @@ export async function updateEarthMapLayers(updateData = true) {
         }
       }
       state.cellDisplayValues[id] = val;
-      state.map.setFeatureState({ source: "earth-h3", id }, { display_val: val });
+      if (_pushedDisplayVals.get(id) !== val) {
+        _pushedDisplayVals.set(id, val);
+        state.map.setFeatureState({ source: "earth-h3", id }, { display_val: val });
+      }
     }
   }
 

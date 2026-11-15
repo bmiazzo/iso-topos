@@ -392,3 +392,20 @@ def test_weights_evaluate_error_status_mapping_and_earth_grid_encoding():
     assert len(r_gz.json()["features"]) == len(r_raw.json()["features"])
 
 
+def test_cached_json_endpoints_return_etag_cache_control_and_304():
+    """Verify /api/v1/earth-grid and /api/v1/metadata emit Cache-Control/ETag and honor If-None-Match."""
+    client = _client()
+    for path in ["/api/v1/metadata", "/api/v1/earth-grid"]:
+        resp = client.get(path)
+        assert resp.status_code == 200
+        etag = resp.headers.get("etag")
+        cache_control = resp.headers.get("cache-control")
+        assert etag
+        assert cache_control and "max-age=" in cache_control
+
+        resp_304 = client.get(path, headers={"If-None-Match": etag})
+        assert resp_304.status_code == 304
+        assert resp_304.headers.get("etag") == etag
+        assert resp_304.content == b""
+
+

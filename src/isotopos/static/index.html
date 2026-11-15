@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <title>iso-topos — Planetary-to-Earth Analog Discovery</title>
+  <link rel="preconnect" href="https://unpkg.com" crossorigin />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="preconnect" href="https://gibs.earthdata.nasa.gov" crossorigin />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/static/styles.css" />
   <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+  <script src="https://unpkg.com/h3-js@4.1.0/dist/h3-js.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -218,6 +222,15 @@
     <section id="main-stage" class="map-stage" tabindex="-1" aria-label="Interactive 3D Earth Globe">
       <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
       <div id="earth-map"></div>
+      <div id="map-loading-overlay" class="map-loading-overlay" role="status" aria-live="polite">
+        <div class="map-loading-card">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div class="loading-copy">
+            <strong class="loading-title">Initializing Planetary Analog Globe</strong>
+            <span id="map-loading-text" class="loading-sub">Loading spatial grid &amp; 87,815 H3 cells…</span>
+          </div>
+        </div>
+      </div>
 
       <!-- Top-Left Zero-Overlap Floating Stack -->
       <div class="map-top-left-stack">

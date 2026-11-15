@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import gzip
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -70,6 +71,7 @@ class DataStore:
         )
         self.engine = AnalogScoringEngine(registry)
         self._json_payload_cache: dict[str, tuple[bytes, bytes]] = {}
+        self._json_etag_cache: dict[str, str] = {}
 
     def get_cached_json_payload(
         self,
@@ -87,7 +89,17 @@ class DataStore:
         gz_bytes = gzip.compress(raw_bytes, compresslevel=5)
         entry = (raw_bytes, gz_bytes)
         self._json_payload_cache[key] = entry
+        self._json_etag_cache[key] = f'"{hashlib.sha256(raw_bytes).hexdigest()[:16]}"'
         return entry
+
+    def get_cached_json_with_etag(
+        self,
+        key: str,
+        builder: Callable[[], Any],
+    ) -> tuple[bytes, bytes, str]:
+        """Return cached (raw_bytes, gz_bytes, etag) for conditional HTTP responses."""
+        raw_bytes, gz_bytes = self.get_cached_json_payload(key, builder)
+        return raw_bytes, gz_bytes, self._json_etag_cache[key]
 
 
 @functools.lru_cache(maxsize=1)

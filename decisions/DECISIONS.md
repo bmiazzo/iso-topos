@@ -165,6 +165,17 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Consequences:** All existing API schemas and scoring outputs remain bit-identical (`test_pillar4_full_preset_ranking_novelty_mask_and_nfr1_latency` passes across all 12 presets well under `100 ms`), `evaluate_single_site()` avoids building a throwaway `PrepackedSiteIndex`, and headless static GeoJSON/parameter endpoints avoid repeated multi-megabyte JSON encoding.
 - **Related:** `REQUIREMENTS.md` (`NFR-1`, `ER-2`, `ER-4`), `DEC-005`, `DEC-010`, `lessons-learned/2026-11-15-gc-collect-and-eval-response-dict-overhead.md`
 
+## DEC-013: O(1) H3 Hover Lookup, `rAF`-Coalesced Pointer Handling, Dirty-Checked Feature States, and Conditional HTTP Caching
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** Dragging and moving the cursor across the 3D Earth globe caused severe main-thread lag because `mousemove` synchronously called `map.queryRenderedFeatures` across 87,815 `earth-h3-fill` polygons, read `tooltip.offsetWidth`/`offsetHeight` and mutated `left`/`top` (layout thrashing), and rewrote `innerHTML` on every pixel move. Additionally, `updateEarthMapLayers` called `setFeatureState` 87,815 times unconditionally, `computeLayerColorRange` sorted an 87,815-element boxed JS array even for non-quantile modes, and `/api/v1/earth-grid` (35 MB) lacked `ETag`/`Cache-Control` headers.
+- **Options Considered:**
+  1. Throttle `queryRenderedFeatures` on `earth-h3-fill` only, or disable H3 hover tooltips.
+  2. Keep the GeoJSON + `setFeatureState` architecture while replacing `earth-h3-fill` hover polygon hit-testing with O(1) `h3-js` `latLngToCell(..., 4)` + `Map` lookup (retaining `queryRenderedFeatures` only for ~40 point pins and an offline fallback), coalescing `mousemove` via `requestAnimationFrame`, pausing hover during drag/motion, positioning tooltips with `transform: translate3d(...)`, dirty-checking `setFeatureState`, using `Float64Array` only for `auto` quantiles, adding `ETag`/`Cache-Control`/`304` on cached JSON endpoints, and adding `#map-loading-overlay`.
+- **Decision:** Adopt Option 2. Preserves full H3 hexagon hover tooltips and zero-ETL-change compatibility while eliminating ~99% of main-thread cursor/drag work, accelerating layer updates, enabling browser caching of the 35 MB grid, and providing clear loading feedback.
+- **Consequences:** `index.html` loads `h3-js@4.1.0` (~30 KB UMD) with preconnect hints and graceful fallback if offline; `DataStore.get_cached_json_with_etag` provides SHA-256 ETags while preserving `get_cached_json_payload`'s 2-tuple contract.
+- **Related:** `REQUIREMENTS.md` (`NFR-1`, `NFR-4`), `DEC-001`, `DEC-012`, `src/isotopos/static/js/components/globe_map.js`, `src/isotopos/api/app.py`
+
 
 
 

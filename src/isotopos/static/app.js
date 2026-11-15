@@ -305,6 +305,15 @@ function bindUIEvents() {
   });
 }
 
+function setLoadingOverlay(text, visible = true) {
+  const overlay = document.getElementById("map-loading-overlay");
+  const textEl = document.getElementById("map-loading-text");
+  if (textEl && text) textEl.textContent = text;
+  if (overlay) {
+    overlay.classList.toggle("is-hidden", !visible);
+  }
+}
+
 async function init() {
   initStarfield();
   state.autoSpin = !prefersReducedMotion();
@@ -318,50 +327,60 @@ async function init() {
     if (isOpen) requestAnimationFrame(() => resizeDimensionChart());
   });
 
-  const [meta, geo] = await Promise.all([fetchMetadata(), fetchEarthGrid()]);
-  state.metadata = meta;
-  state.earthGeojson = geo;
+  try {
+    setLoadingOverlay("Loading spatial grid & 87,815 H3 cells…", true);
+    const [meta, geo] = await Promise.all([fetchMetadata(), fetchEarthGrid()]);
+    state.metadata = meta;
+    state.earthGeojson = geo;
 
-  populateLayerSwitcher();
-  populatePresetDropdown();
-  buildAdvancedControls({
-    collapseCtrl,
-    onScheduleRank: scheduleRank,
-    onSyncSummaries: syncMenuSummaries,
-  });
-  updateLegendGradient();
-  initEarthMap({ onInspectSite: inspectAnySiteById });
-  bindUIEvents();
-  startAutoSpinLoop();
-
-  // Support URL deep links returned from /planetary (?preset=... or ?body=...&lat=...&lon=...)
-  const params = new URLSearchParams(window.location.search);
-  const presetParam = params.get("preset");
-  const bodyParam = params.get("body");
-  const latParam = parseFloat(params.get("lat"));
-  const lonParam = parseFloat(params.get("lon"));
-
-  if (presetParam && state.metadata.presets.some((p) => p.id === presetParam)) {
-    await selectPreset(presetParam);
-    return;
-  }
-
-  if ((bodyParam === "moon" || bodyParam === "mars") && !Number.isNaN(latParam) && !Number.isNaN(lonParam)) {
-    state.body = bodyParam;
-    setButtonPressed(document.getElementById("btn-body-moon"), bodyParam === "moon");
-    setButtonPressed(document.getElementById("btn-body-mars"), bodyParam === "mars");
+    setLoadingOverlay("Building 3D globe & computing initial rankings…", true);
+    populateLayerSwitcher();
     populatePresetDropdown();
-    const first = state.metadata.presets.find((p) => p.body === bodyParam);
-    if (first?.recommended_weights) {
-      state.weights = { ...first.recommended_weights };
-    }
-    await extractCoordinate(latParam, lonParam);
-    return;
-  }
+    buildAdvancedControls({
+      collapseCtrl,
+      onScheduleRank: scheduleRank,
+      onSyncSummaries: syncMenuSummaries,
+    });
+    updateLegendGradient();
+    initEarthMap({ onInspectSite: inspectAnySiteById });
+    bindUIEvents();
+    startAutoSpinLoop();
 
-  const firstPreset = state.metadata.presets.find((p) => p.body === state.body);
-  if (firstPreset) {
-    await selectPreset(firstPreset.id);
+    // Support URL deep links returned from /planetary (?preset=... or ?body=...&lat=...&lon=...)
+    const params = new URLSearchParams(window.location.search);
+    const presetParam = params.get("preset");
+    const bodyParam = params.get("body");
+    const latParam = parseFloat(params.get("lat"));
+    const lonParam = parseFloat(params.get("lon"));
+
+    if (presetParam && state.metadata.presets.some((p) => p.id === presetParam)) {
+      await selectPreset(presetParam);
+      setLoadingOverlay("", false);
+      return;
+    }
+
+    if ((bodyParam === "moon" || bodyParam === "mars") && !Number.isNaN(latParam) && !Number.isNaN(lonParam)) {
+      state.body = bodyParam;
+      setButtonPressed(document.getElementById("btn-body-moon"), bodyParam === "moon");
+      setButtonPressed(document.getElementById("btn-body-mars"), bodyParam === "mars");
+      populatePresetDropdown();
+      const first = state.metadata.presets.find((p) => p.body === bodyParam);
+      if (first?.recommended_weights) {
+        state.weights = { ...first.recommended_weights };
+      }
+      await extractCoordinate(latParam, lonParam);
+      setLoadingOverlay("", false);
+      return;
+    }
+
+    const firstPreset = state.metadata.presets.find((p) => p.body === state.body);
+    if (firstPreset) {
+      await selectPreset(firstPreset.id);
+    }
+    setLoadingOverlay("", false);
+  } catch (err) {
+    setLoadingOverlay(`Failed to initialize globe: ${err?.message || "Unknown error"}`, true);
+    throw err;
   }
 }
 

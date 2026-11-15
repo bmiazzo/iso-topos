@@ -558,16 +558,31 @@ function initPlanetaryMap() {
       },
     });
 
-    map.on("mousemove", (e) => {
-      const lat = e.lngLat.lat;
-      const lon = normalizeLon180(e.lngLat.lng);
+    const cursorPillEl = document.getElementById("pl-cursor-pill");
+    let plHoverRafId = 0;
+    let plPendingLngLat = null;
+    const renderCursorPill = () => {
+      plHoverRafId = 0;
+      const lngLat = plPendingLngLat;
+      plPendingLngLat = null;
+      if (!lngLat || !cursorPillEl || plState.pointerDown || map.isMoving()) return;
+      const lat = lngLat.lat;
+      const lon = normalizeLon180(lngLat.lng);
       let extra = "";
       if (plState.activeSlice) {
         const val = bilinearSampleSlice(plState.activeSlice, lat, lon);
         extra = ` · ${plState.overlayParam}: ${val.toFixed(1)}`;
       }
-      document.getElementById("pl-cursor-pill").textContent =
+      cursorPillEl.textContent =
         `${plState.body.toUpperCase()} · ${lat.toFixed(2)}°, ${lon.toFixed(2)}°${extra}`;
+    };
+
+    map.on("mousemove", (e) => {
+      if (plState.pointerDown || map.isMoving()) return;
+      plPendingLngLat = e.lngLat;
+      if (!plHoverRafId) {
+        plHoverRafId = requestAnimationFrame(renderCursorPill);
+      }
     });
 
     map.on("click", (e) => {

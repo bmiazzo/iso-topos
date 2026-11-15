@@ -72,7 +72,9 @@ export function computeLayerColorRange({
   scaleMode,
   paramSpec,
 }) {
-  const vals = [];
+  const needsQuantiles = scaleMode === "auto";
+  const vals = needsQuantiles ? new Float64Array(features.length) : null;
+  let validCount = 0;
   let dataMin = Infinity;
   let dataMax = -Infinity;
 
@@ -80,12 +82,12 @@ export function computeLayerColorRange({
     const v = cellDisplayValues[feat.properties.id] ?? -999999;
     if (v <= -99999) continue;
     if (isScoreLayer && v < effectiveCutoff) continue;
-    vals.push(v);
+    if (needsQuantiles) vals[validCount] = v;
+    validCount += 1;
     if (v < dataMin) dataMin = v;
     if (v > dataMax) dataMax = v;
   }
 
-  const validCount = vals.length;
   let minVal = 0;
   let maxVal = 100;
   let isClipped = false;
@@ -99,10 +101,10 @@ export function computeLayerColorRange({
       maxVal = 100;
     }
   } else if (validCount > 0) {
-    if (scaleMode === "auto" && validCount >= 16) {
-      vals.sort((a, b) => a - b);
-      const p2 = quantile(vals, 0.02);
-      const p98 = quantile(vals, 0.98);
+    if (needsQuantiles && validCount >= 16) {
+      const sorted = vals.subarray(0, validCount).sort();
+      const p2 = quantile(sorted, 0.02);
+      const p98 = quantile(sorted, 0.98);
       if (p98 - p2 > (isScoreLayer ? 2.0 : 1e-3)) {
         minVal = p2;
         maxVal = p98;
