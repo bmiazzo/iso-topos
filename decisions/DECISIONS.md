@@ -232,6 +232,18 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Consequences:** `state.js` exports `RESIZE_STORAGE_KEY`; `starfield.js`, `globe_map.js`, `breakdown_panel.js`, and `planetary_picker.js` react dynamically via `ResizeObserver` without requiring `window` resize events; `/planetary` remains untouched.
 - **Related:** `DEC-009`, `src/isotopos/static/js/ui/resizable.js`, `src/isotopos/static/styles/layout.css`, `src/isotopos/static/styles/menus.css`
 
+## DEC-019: Decoupled Grid Collapse Tracks, HiDPI 2× Supersampled Cesium HUD Labels with Smart LOD, and 5-Dimension Grouped Parameter Inspector
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** Three UX/readability issues surfaced during review: (1) pressing "Hide" on either sidebar left a wide black bar on the side whenever `--left-width` or `--right-width` had been set as an inline style on `#workspace` by `SidebarResizeController`, because inline custom properties override class-level `.workspace.left-collapsed { --left-width: 0px; }` rules while `.left-panel` became `opacity: 0`; (2) 3D Earth and Moon/Mars globe tags looked pixelated because `createCesiumViewer` set `useBrowserRecommendedResolution: true` (ignoring HiDPI `devicePixelRatio`) and `Cesium.LabelCollection` rasterized `10.5px–11px` fonts at `scale: 1.0` with a heavy `3px` outline; and (3) scientific data in the right drawer hid Caveats, Relevance, and the 17-Parameter Comparison inside collapsed accordions with `10.5px` text and a `240px` scroll cap.
+- **Options Considered:**
+  1. Remove inline `--left-width`/`--right-width` on collapse (losing custom dragged widths unless re-applied in JS) and only increase font size on the existing 5-column table.
+  2. Decouple custom width variables (`--left-width`/`--right-width`) from active CSS Grid track variables (`--left-track`/`--right-track`) with `0px !important` collapse rules and a frame-synced `requestAnimationFrame` resize loop; enable native HiDPI `viewer.resolutionScale`, 2.5× supersampled pin billboards, and 2× supersampled HUD pill labels (`22px–25px` font at `scale: 0.48–0.56`, `showBackground: true`, negative `eyeOffset`, and 3-tier distance LOD); and overhaul the UI with a Sticky Active Site Banner, Right Drawer View Switcher (`Split View` | `Site Inspector` | `Candidates List`), Wide Inspector toggle, 5-Dimension mini-pills on Ranked Cards, and 5-Dimension Grouped Parameter Comparison Cards (`Earth`, `Target`, signed `Δ`, similarity bar, and agency provenance pills) alongside a 1-click Compact Table toggle.
+- **Decision:** Adopt Option 2. Preserves 100% of the 17-parameter scientific data and provenance (`DR-3`, `FR-11`, `FR-15`) while eliminating the collapsed-sidebar black bar bug, rendering razor-sharp 3D globe tags across zoom levels, and making every metric effortless to scan.
+- **Consequences:** `layout.css` uses `--left-track` and `--right-track`; `cesium_helpers.js` exports `buildCrispLabelOptions`; `breakdown_panel.js` renders both `#detail-comparison-cards` and `#detail-comparison-body`.
+- **Related:** `DEC-009`, `DEC-014`, `DEC-018`, `lessons-learned/2026-11-15-css-inline-var-collapse-and-cesium-label-supersampling.md`
+
+
 
 
 

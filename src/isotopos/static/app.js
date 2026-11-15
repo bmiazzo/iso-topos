@@ -76,12 +76,12 @@ const sidebarResizeCtrl = new SidebarResizeController({
       handleEl: document.getElementById("resizer-left"),
       side: "left",
       cssVar: "--left-width",
-      defaultWidth: 330,
+      defaultWidth: 340,
       minWidth: 240,
       maxWidth: 640,
       minCenterWidth: 260,
       oppositeCssVar: "--right-width",
-      oppositeDefault: 410,
+      oppositeDefault: 460,
       oppositeCollapsedClass: "right-collapsed",
     },
     {
@@ -89,12 +89,12 @@ const sidebarResizeCtrl = new SidebarResizeController({
       handleEl: document.getElementById("resizer-right"),
       side: "right",
       cssVar: "--right-width",
-      defaultWidth: 410,
+      defaultWidth: 460,
       minWidth: 280,
-      maxWidth: 760,
+      maxWidth: 820,
       minCenterWidth: 260,
       oppositeCssVar: "--left-width",
-      oppositeDefault: 330,
+      oppositeDefault: 340,
       oppositeCollapsedClass: "left-collapsed",
     },
   ],
@@ -121,13 +121,39 @@ function scheduleRank() {
   state.rankDebounce = setTimeout(() => runRank({ flyToTop: false }), 110);
 }
 
+function setRightDrawerView(mode) {
+  state.rightViewMode = mode;
+  const splitBtn = document.getElementById("btn-right-view-split");
+  const inspBtn = document.getElementById("btn-right-view-inspector");
+  const candBtn = document.getElementById("btn-right-view-candidates");
+  setButtonPressed(splitBtn, mode === "split");
+  setButtonPressed(inspBtn, mode === "inspector");
+  setButtonPressed(candBtn, mode === "candidates");
+
+  const rankedSec = document.getElementById("ranked-analogs-section");
+  const breakdownSec = document.getElementById("breakdown-card");
+  if (rankedSec) {
+    rankedSec.classList.toggle("hidden", mode === "inspector");
+  }
+  if (breakdownSec && state.selectedSiteId) {
+    breakdownSec.classList.toggle("hidden", mode === "candidates");
+  }
+  requestAnimationFrame(() => resizeDimensionChart());
+}
+
 function handleSelectRankedSite(result) {
+  if (state.rightViewMode === "candidates") {
+    setRightDrawerView("inspector");
+  }
   showBreakdown(result, { collapseCtrl, onSelectSite: handleSelectRankedSite });
   flyToSiteOnGlobe(result.site.lon, result.site.lat, 4.3, true);
 }
 
 async function inspectAnySiteById(siteId) {
   if (!state.target || !siteId) return;
+  if (state.rightViewMode === "candidates") {
+    setRightDrawerView("inspector");
+  }
   const cached = [
     ...(state.lastRankResponse?.hotspot_results || []),
     ...(state.lastRankResponse?.top_h3_results || []),
@@ -296,10 +322,44 @@ function bindUIEvents() {
   });
 
   bindAdvancedEvents({
+    collapseCtrl,
     onRank: () => runRank({ flyToTop: false }),
     onScheduleRank: scheduleRank,
     onSyncSummaries: syncMenuSummaries,
   });
+
+  const wideRightBtn = document.getElementById("btn-wide-right");
+  wideRightBtn?.addEventListener("click", () => {
+    const workspaceEl = document.getElementById("workspace");
+    if (!workspaceEl) return;
+    const nextWide = !workspaceEl.classList.contains("right-wide");
+    workspaceEl.classList.toggle("right-wide", nextWide);
+    setButtonPressed(wideRightBtn, nextWide);
+    wideRightBtn.textContent = nextWide ? "⇔ Standard" : "⇔ Wide";
+    sidebarCtrl._runTransitionResizeLoop(260);
+  });
+
+  document.getElementById("btn-fly-selected")?.addEventListener("click", () => {
+    const site = state.selectedSiteResult?.site;
+    if (site) {
+      flyToSiteOnGlobe(site.lon, site.lat, 4.2, true);
+    }
+  });
+
+  document.getElementById("btn-right-view-split")?.addEventListener("click", () => setRightDrawerView("split"));
+  document.getElementById("btn-right-view-inspector")?.addEventListener("click", () => setRightDrawerView("inspector"));
+  document.getElementById("btn-right-view-candidates")?.addEventListener("click", () => setRightDrawerView("candidates"));
+
+  const btnParamCards = document.getElementById("btn-param-view-cards");
+  const btnParamTable = document.getElementById("btn-param-view-table");
+  const setParamComparisonView = (view) => {
+    setButtonPressed(btnParamCards, view === "cards");
+    setButtonPressed(btnParamTable, view === "table");
+    document.getElementById("detail-comparison-cards")?.classList.toggle("hidden", view !== "cards");
+    document.getElementById("detail-comparison-table-wrap")?.classList.toggle("hidden", view !== "table");
+  };
+  btnParamCards?.addEventListener("click", () => setParamComparisonView("cards"));
+  btnParamTable?.addEventListener("click", () => setParamComparisonView("table"));
 
   document.getElementById("layer-variable-select").addEventListener("change", async (e) => {
     state.activeLayer = e.target.value;

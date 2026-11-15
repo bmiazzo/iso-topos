@@ -61,6 +61,10 @@
         Click globe or mission pin to sample NASA/PDS grid — hover for live coordinates
       </div>
 
+      <button id="pl-expand-sidebar" class="floating-expand-pill right-expand-pill hidden" type="button" title="Show Target Inspector">
+        Target Inspector ◀
+      </button>
+
       <section id="pl-legend-card" class="map-overlay-card planetary-legend-card hidden">
         <div class="overlay-body-stack">
           <div class="slider-label-row">
@@ -77,7 +81,12 @@
       </section>
     </section>
 
-    <aside class="planetary-sidebar no-scrollbar">
+    <aside id="pl-sidebar" class="planetary-sidebar no-scrollbar">
+      <div class="sidebar-header">
+        <button id="pl-collapse-sidebar" class="sidebar-collapse-btn" type="button" title="Collapse Target Sidebar">Hide ▶</button>
+        <span class="sidebar-title">Planetary Target Inspector</span>
+      </div>
+
       <section class="planetary-card">
         <div class="detail-summary-top">
           <div>

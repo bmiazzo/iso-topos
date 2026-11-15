@@ -208,6 +208,22 @@ export class SidebarController {
     this.onLayoutChange = onLayoutChange;
     this.store = loadPersistedStore(storage);
     this._resizeTimer = null;
+    this._animRaf = 0;
+  }
+
+  _runTransitionResizeLoop(durationMs = 260) {
+    if (!this.onLayoutChange) return;
+    if (this._animRaf) cancelAnimationFrame(this._animRaf);
+    const start = performance.now();
+    const step = (now) => {
+      this.onLayoutChange();
+      if (now - start < durationMs) {
+        this._animRaf = requestAnimationFrame(step);
+      } else {
+        this._animRaf = 0;
+      }
+    };
+    this._animRaf = requestAnimationFrame(step);
   }
 
   init() {
@@ -245,9 +261,9 @@ export class SidebarController {
     }
 
     if (notify && this.onLayoutChange) {
-      requestAnimationFrame(() => this.onLayoutChange());
+      this._runTransitionResizeLoop(260);
       clearTimeout(this._resizeTimer);
-      this._resizeTimer = setTimeout(() => this.onLayoutChange(), 240);
+      this._resizeTimer = setTimeout(() => this.onLayoutChange(), 270);
     }
   }
 }

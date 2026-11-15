@@ -3,6 +3,7 @@
 import { extractTarget, fetchMetadata } from "./api.js";
 import {
   bindCesiumCameraInteraction,
+  buildCrispLabelOptions,
   cameraHeightToApproxZoom,
   createAutoSpinController,
   createCesiumViewer,
@@ -530,23 +531,30 @@ function updateMarkersAndList() {
       const isSelected = p.id === plState.presetId;
       const lon = normalizeLon180(p.lon);
       const pos = Cesium.Cartesian3.fromDegrees(lon, p.lat, pinHeight, ellipsoid);
+      const pinSize = isSelected ? 26 : 19;
       _pinBillboards.add({
         id: { kind: "mission_pin", id: p.id, name: p.name },
         position: pos,
         image: isSelected ? imgs.pinSelected : imgs.pinDefault,
+        width: pinSize,
+        height: pinSize,
+        eyeOffset: new Cesium.Cartesian3(0, 0, isSelected ? -18000 : -10000),
       });
-      _pinLabels.add({
-        id: { kind: "mission_pin", id: p.id, name: p.name },
-        position: pos,
-        text: p.name,
-        font: "600 11px system-ui, -apple-system, sans-serif",
-        fillColor: Cesium.Color.fromCssColorString(isSelected ? "#fde68a" : "#e2e8f0"),
-        outlineColor: Cesium.Color.fromCssColorString("#060b16"),
-        outlineWidth: 3,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        verticalOrigin: Cesium.VerticalOrigin.TOP,
-        pixelOffset: new Cesium.Cartesian2(0, 11),
-      });
+      _pinLabels.add(
+        buildCrispLabelOptions({
+          id: { kind: "mission_pin", id: p.id, name: p.name },
+          position: pos,
+          text: p.name,
+          isPrimary: true,
+          isSelected,
+          fillColorCss: isSelected ? "#fef08a" : "#f1f5f9",
+          bgColorCss: isSelected ? "rgba(8, 25, 42, 0.94)" : "rgba(6, 11, 22, 0.86)",
+          verticalOrigin: Cesium.VerticalOrigin.TOP,
+          pixelOffsetY: 11,
+          maxDist: ellipsoid.maximumRadius * 4.2,
+          fadeStartDist: ellipsoid.maximumRadius * 2.8,
+        }),
+      );
     }
 
     if (_selectedRing) {
@@ -853,6 +861,23 @@ function bindEvents() {
     });
     _plSpinController.requestFrame();
   });
+
+  const plWorkspace = document.querySelector(".planetary-workspace");
+  const plCollapseBtn = document.getElementById("pl-collapse-sidebar");
+  const plExpandBtn = document.getElementById("pl-expand-sidebar");
+  const setPlanetarySidebarCollapsed = (collapsed) => {
+    if (!plWorkspace) return;
+    plWorkspace.classList.toggle("right-collapsed", collapsed);
+    plExpandBtn?.classList.toggle("hidden", !collapsed);
+    const start = performance.now();
+    const syncViewer = (now) => {
+      if (_viewer && !_viewer.isDestroyed()) _viewer.resize();
+      if (now - start < 260) requestAnimationFrame(syncViewer);
+    };
+    requestAnimationFrame(syncViewer);
+  };
+  plCollapseBtn?.addEventListener("click", () => setPlanetarySidebarCollapsed(true));
+  plExpandBtn?.addEventListener("click", () => setPlanetarySidebarCollapsed(false));
 
   document.getElementById("pl-extract-btn").addEventListener("click", () => {
     const lat = parseFloat(document.getElementById("pl-input-lat").value);

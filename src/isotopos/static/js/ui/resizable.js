@@ -132,6 +132,9 @@ export class SidebarResizeController {
 
   _getCurrentWidth(spec) {
     if (!this.workspaceEl) return spec.defaultWidth;
+    const inlineRaw = this.workspaceEl.style.getPropertyValue(spec.cssVar);
+    const inlineParsed = parseFloat(inlineRaw);
+    if (Number.isFinite(inlineParsed) && inlineParsed > 0) return inlineParsed;
     const raw = getComputedStyle(this.workspaceEl).getPropertyValue(spec.cssVar);
     const parsed = parseFloat(raw);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : spec.defaultWidth;
@@ -139,6 +142,14 @@ export class SidebarResizeController {
 
   _applyWidth(spec, width, { persist = false, notify = true } = {}) {
     if (!this.workspaceEl) return width;
+    if (spec.side === "right" && this.workspaceEl.classList.contains("right-wide")) {
+      this.workspaceEl.classList.remove("right-wide");
+      const wideBtn = document.getElementById("btn-wide-right");
+      if (wideBtn) {
+        wideBtn.setAttribute("aria-pressed", "false");
+        wideBtn.textContent = "⇔ Wide";
+      }
+    }
     const maxAllowed = this._getMaxAllowed(spec);
     const clamped = clamp(width, spec.minWidth, maxAllowed);
     this.workspaceEl.style.setProperty(spec.cssVar, `${clamped}px`);

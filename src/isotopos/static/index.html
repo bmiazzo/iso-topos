@@ -209,6 +209,17 @@
               </button>
               <div class="collapse-body">
                 <div class="collapse-inner">
+                  <div class="weights-toolbar">
+                    <div class="weights-toolbar-btns">
+                      <button id="btn-expand-all-dims" class="small-btn" type="button">Expand All</button>
+                      <button id="btn-collapse-all-dims" class="small-btn" type="button">Collapse All</button>
+                    </div>
+                    <button id="btn-reset-weights" class="small-btn" type="button" title="Reset weights to mission preset defaults">Reset Weights</button>
+                  </div>
+                  <div class="param-legend-row" aria-hidden="true">
+                    <span>Target Value Override</span>
+                    <span>Importance Weight (0–100%)</span>
+                  </div>
                   <div id="all-zero-warning" class="alert-warn hidden">
                     All parameter weights are 0%. Enable at least one parameter to compute rankings.
                   </div>
@@ -377,12 +388,35 @@
     <!-- Right Breakdown & Rankings Drawer -->
     <aside id="right-panel" class="panel right-panel no-scrollbar">
       <div class="sidebar-header">
-        <button id="btn-collapse-right" class="sidebar-collapse-btn" type="button" title="Collapse Results Sidebar">Hide ▶</button>
-        <span class="sidebar-title">Analog Results</span>
+        <div class="sidebar-header-actions">
+          <button id="btn-collapse-right" class="sidebar-collapse-btn" type="button" title="Collapse Results Sidebar">Hide ▶</button>
+          <button id="btn-wide-right" class="sidebar-collapse-btn" type="button" aria-pressed="false" title="Toggle wider inspector drawer">⇔ Wide</button>
+        </div>
+        <span class="sidebar-title">Analog Results &amp; Inspector</span>
+      </div>
+
+      <div id="active-site-banner" class="active-site-banner">
+        <div class="active-site-banner-main">
+          <div class="active-site-banner-text">
+            <span class="active-site-eyebrow">Active Earth Analog</span>
+            <strong id="banner-site-name" class="active-site-name">Loading top analog…</strong>
+            <span id="banner-site-meta" class="active-site-meta">—</span>
+          </div>
+          <div class="active-site-banner-right">
+            <span id="banner-site-score" class="score-pill mono-num">—</span>
+            <button id="btn-fly-selected" class="small-btn" type="button" title="Center globe on active site">◎ Locate</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="right-view-tabs" class="segmented small-seg right-view-seg" role="group" aria-label="Right Drawer View Mode">
+        <button id="btn-right-view-split" class="seg-btn active" type="button" aria-pressed="true">Split View</button>
+        <button id="btn-right-view-inspector" class="seg-btn" type="button" aria-pressed="false">Site Inspector</button>
+        <button id="btn-right-view-candidates" class="seg-btn" type="button" aria-pressed="false">Candidates List</button>
       </div>
 
       <!-- Level 1: Ranked Earth Analogs (Open by default) -->
-      <section class="collapsible-menu menu-level-1" data-collapse-id="ranked-analogs" data-collapse-default="open">
+      <section id="ranked-analogs-section" class="collapsible-menu menu-level-1" data-collapse-id="ranked-analogs" data-collapse-default="open">
         <button type="button" class="collapse-trigger" aria-expanded="true">
           <span class="collapse-title-wrap">
             <span class="chevron">▾</span>
@@ -462,9 +496,9 @@
               </div>
             </section>
 
-            <!-- Level 2: Exploration & Testing Relevance (Collapsed by default) -->
-            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-relevance" data-collapse-default="closed">
-              <button type="button" class="collapse-trigger" aria-expanded="false">
+            <!-- Level 2: Exploration & Testing Relevance (Open by default) -->
+            <section class="collapsible-menu menu-level-2" data-collapse-id="detail-relevance" data-collapse-default="open">
+              <button type="button" class="collapse-trigger" aria-expanded="true">
                 <span class="collapse-title-wrap">
                   <span class="chevron">▾</span>
                   <span class="collapse-title">Exploration &amp; Testing Relevance</span>
@@ -478,9 +512,9 @@
               </div>
             </section>
 
-            <!-- Level 2: Earth-Limit Caveats (Collapsed by default) -->
-            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-caveats" data-collapse-default="closed">
-              <button type="button" class="collapse-trigger" aria-expanded="false">
+            <!-- Level 2: Earth-Limit Caveats (Open by default) -->
+            <section class="collapsible-menu menu-level-2" data-collapse-id="detail-caveats" data-collapse-default="open">
+              <button type="button" class="collapse-trigger" aria-expanded="true">
                 <span class="collapse-title-wrap">
                   <span class="chevron">▾</span>
                   <span class="collapse-title">Earth-Limit Caveats</span>
@@ -494,9 +528,9 @@
               </div>
             </section>
 
-            <!-- Level 2: Unit-Level Comparison & Provenance (Collapsed by default) -->
-            <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="detail-provenance" data-collapse-default="closed">
-              <button type="button" class="collapse-trigger" aria-expanded="false">
+            <!-- Level 2: Unit-Level Comparison & Provenance (Open by default) -->
+            <section class="collapsible-menu menu-level-2" data-collapse-id="detail-provenance" data-collapse-default="open">
+              <button type="button" class="collapse-trigger" aria-expanded="true">
                 <span class="collapse-title-wrap">
                   <span class="chevron">▾</span>
                   <span class="collapse-title">Data Sources &amp; Parameter Comparison</span>
@@ -505,7 +539,15 @@
               </button>
               <div class="collapse-body">
                 <div class="collapse-inner">
-                  <div class="table-scroll no-scrollbar">
+                  <div class="param-view-toolbar">
+                    <span class="muted-note" style="margin:0;">17 parameters across 5 analogy dimensions</span>
+                    <div class="segmented param-view-seg" role="group" aria-label="Parameter Comparison Layout">
+                      <button id="btn-param-view-cards" class="seg-btn active" type="button" aria-pressed="true">Grouped Cards</button>
+                      <button id="btn-param-view-table" class="seg-btn" type="button" aria-pressed="false">Compact Table</button>
+                    </div>
+                  </div>
+                  <div id="detail-comparison-cards" class="param-dim-groups"></div>
+                  <div id="detail-comparison-table-wrap" class="table-scroll no-scrollbar hidden">
                     <table class="prov-table">
                       <thead>
                         <tr>

@@ -168,6 +168,42 @@ function updateVisualPreviews(site) {
   }
 }
 
+const SHORT_DIM_NAMES = {
+  topography: "Topo",
+  geology: "Geo",
+  temperature_illumination: "Therm",
+  water_ice: "Ice",
+  subsurface_biology_ops: "Sub/Bio",
+};
+
+function formatPhysicalNum(v) {
+  const num = Number(v);
+  if (!Number.isFinite(num)) return String(v ?? "—");
+  if (Math.abs(num) >= 100) return Math.round(num).toLocaleString("en-US");
+  if (Math.abs(num) >= 10) return num.toFixed(1);
+  return num.toFixed(2);
+}
+
+function formatSignedDelta(earthVal, targetVal) {
+  const e = Number(earthVal);
+  const t = Number(targetVal);
+  if (!Number.isFinite(e) || !Number.isFinite(t)) return "—";
+  const diff = e - t;
+  if (Math.abs(diff) < 1e-4) return "0.00";
+  const sign = diff > 0 ? "+" : "−";
+  return `${sign}${formatPhysicalNum(Math.abs(diff))}`;
+}
+
+function classifySimilarity(sim, weight) {
+  if (weight === 0 || sim === null || sim === undefined) {
+    return { tier: "na", text: "N/A (0% wt)", pct: 0 };
+  }
+  const pct = Math.round(sim * 100);
+  if (pct >= 75) return { tier: "strong", text: `${pct}%`, pct };
+  if (pct >= 50) return { tier: "moderate", text: `${pct}%`, pct };
+  return { tier: "divergent", text: `${pct}%`, pct };
+}
+
 export function renderRankedList({ onSelectSite }) {
   const listEl = document.getElementById("ranked-list");
   if (!listEl || !state.lastRankResponse) return;
@@ -188,7 +224,8 @@ export function renderRankedList({ onSelectSite }) {
     item.type = "button";
     item.className = `rank-item ${isSelected ? "selected" : ""}`;
     item.setAttribute("aria-pressed", isSelected ? "true" : "false");
-    const pct = (r.overall_score * 100).toFixed(1);
+    const pctNum = r.overall_score * 100;
+    const pct = pctNum.toFixed(1);
     const isHotspot = r.site.site_type === "hotspot";
     const typeBadge = isHotspot
       ? r.site.is_well_known
@@ -200,14 +237,30 @@ export function renderRankedList({ onSelectSite }) {
         ? `${r.site.country} · ${r.site.region}`
         : r.site.region;
     const rankNum = state.activeTab === "all" ? idx + 1 : r.rank;
+
+    const dimPillsHtml = (r.dimension_breakdowns || [])
+      .map((d) => {
+        const shortLbl = SHORT_DIM_NAMES[d.dimension_id] || d.dimension_name.slice(0, 5);
+        const st = d.sub_score === null ? "na" : d.status || "moderate";
+        const valStr = d.sub_score === null ? "N/A" : `${Math.round(d.sub_score * 100)}%`;
+        return `<span class="rank-dim-pill tier-${escapeHtml(st)}" title="${escapeHtml(d.dimension_name)}: ${escapeHtml(valStr)}">${escapeHtml(shortLbl)} <b>${escapeHtml(valStr)}</b></span>`;
+      })
+      .join("");
+
     item.innerHTML = `
-      <span class="rank-item-info">
+      <span class="rank-item-top">
         <span class="rank-item-name">#${rankNum} ${escapeHtml(r.site.name)}</span>
-        <span class="rank-item-sub">
-          <span class="rank-type-badge ${isHotspot ? "hotspot" : ""}">${escapeHtml(typeBadge)}</span>${escapeHtml(place)}
-        </span>
+        <span class="score-pill mono-num">${escapeHtml(pct)}%</span>
       </span>
-      <span class="score-pill mono-num">${escapeHtml(pct)}%</span>
+      <span class="rank-item-sub">
+        <span class="rank-type-badge ${isHotspot ? "hotspot" : ""}">${escapeHtml(typeBadge)}</span>
+        <span>${escapeHtml(place)}</span>
+        <span class="rank-coords mono-num">${r.site.lat.toFixed(1)}°, ${r.site.lon.toFixed(1)}°</span>
+      </span>
+      <span class="rank-score-track" aria-hidden="true">
+        <span class="rank-score-fill" style="width: ${Math.max(4, Math.min(100, Math.round(pctNum)))}%;"></span>
+      </span>
+      <span class="rank-dim-strip">${dimPillsHtml}</span>
     `;
     item.addEventListener("click", () => onSelectSite(r));
     listEl.appendChild(item);
@@ -216,19 +269,31 @@ export function renderRankedList({ onSelectSite }) {
 
 export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
   state.selectedSiteId = result.site.id;
+  state.selectedSiteResult = result;
   highlightSelectedSiteOnMap(result.site.id, [result.site.lon, result.site.lat]);
 
-  document.getElementById("breakdown-card").classList.remove("hidden");
+  const breakdownCard = document.getElementById("breakdown-card");
+  if (breakdownCard) {
+    breakdownCard.classList.toggle("hidden", state.rightViewMode === "candidates");
+  }
   document.getElementById("detail-name").textContent = result.site.name;
   const locText =
     result.site.country && result.site.country !== result.site.region
       ? `${result.site.country} · ${result.site.region}`
       : result.site.region;
-  document.getElementById("detail-meta").textContent =
-    `${locText} (${result.site.lat.toFixed(2)}°, ${result.site.lon.toFixed(2)}°)`;
-  document.getElementById("detail-score-badge").textContent =
-    `${(result.overall_score * 100).toFixed(1)}%`;
+  const coordText = `${result.site.lat.toFixed(2)}°, ${result.site.lon.toFixed(2)}°`;
+  document.getElementById("detail-meta").textContent = `${locText} (${coordText})`;
+  const overallPctText = `${(result.overall_score * 100).toFixed(1)}%`;
+  document.getElementById("detail-score-badge").textContent = overallPctText;
   document.getElementById("detail-notes").textContent = result.site.notes || "";
+
+  // Update Sticky Active Site Banner
+  const bannerName = document.getElementById("banner-site-name");
+  const bannerMeta = document.getElementById("banner-site-meta");
+  const bannerScore = document.getElementById("banner-site-score");
+  if (bannerName) bannerName.textContent = result.site.name;
+  if (bannerMeta) bannerMeta.textContent = `${locText} · ${coordText}`;
+  if (bannerScore) bannerScore.textContent = overallPctText;
 
   const typeBadge = document.getElementById("detail-type-badge");
   if (typeBadge) {
@@ -284,15 +349,15 @@ export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
       type: "bar",
       data: {
         labels,
-        datasets: [{ label: "Dimension Similarity (%)", data: values, backgroundColor: colors }],
+        datasets: [{ label: "Dimension Similarity (%)", data: values, backgroundColor: colors, borderRadius: 4 }],
       },
       options: {
         indexAxis: "y",
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { min: 0, max: 100, ticks: { color: "#93a4c3" }, grid: { color: "#27324a" } },
-          y: { ticks: { color: "#e6edf7", font: { size: 10 } }, grid: { display: false } },
+          x: { min: 0, max: 100, ticks: { color: "#a1b4d4", font: { size: 11 } }, grid: { color: "#263550" } },
+          y: { ticks: { color: "#eef4fc", font: { size: 11.5, weight: "600" } }, grid: { display: false } },
         },
         plugins: { legend: { display: false } },
       },
@@ -333,23 +398,118 @@ export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
     result.earth_limit_caveats.length ? "warn" : "neutral"
   );
 
-  // Provenance & Unit-Level Comparison Table
+  // Provenance & Unit-Level Comparison (5-Dimension Grouped Rich Cards + Compact Table)
   const interpSet = new Set(interpParams);
+  const targetExtrapSet = new Set(state.target?.extrapolated_parameters || []);
+  const cardsContainer = document.getElementById("detail-comparison-cards");
   const tbody = document.getElementById("detail-comparison-body");
-  tbody.innerHTML = "";
+  if (cardsContainer) cardsContainer.innerHTML = "";
+  if (tbody) tbody.innerHTML = "";
+
+  const compByParamId = new Map();
+  for (const comp of result.parameter_comparisons) {
+    compByParamId.set(comp.parameter_id, comp);
+  }
+
+  const dimBreakdownsById = new Map();
+  for (const d of result.dimension_breakdowns || []) {
+    dimBreakdownsById.set(d.dimension_id, d);
+  }
+
+  const targetBodyUpper = (state.body || "moon").toUpperCase();
+
+  for (const dim of state.metadata.dimensions) {
+    const dimParams = state.metadata.parameters.filter((p) => p.dimension_id === dim.id);
+    const dimBreak = dimBreakdownsById.get(dim.id);
+    const dimStatus = dimBreak?.sub_score === null ? "na" : dimBreak?.status || "moderate";
+    const dimScoreText =
+      dimBreak?.sub_score === null || dimBreak?.sub_score === undefined
+        ? "N/A (0% weight)"
+        : `${Math.round(dimBreak.sub_score * 100)}% Match`;
+
+    if (cardsContainer) {
+      const dimGroupEl = document.createElement("div");
+      dimGroupEl.className = "param-dim-section";
+      dimGroupEl.innerHTML = `
+        <div class="param-dim-header">
+          <span class="param-dim-title">${escapeHtml(dim.name)}</span>
+          <span class="param-dim-badge tier-${escapeHtml(dimStatus)} mono-num">${escapeHtml(dimScoreText)}</span>
+        </div>
+        <div class="param-dim-cards-list"></div>
+      `;
+      const listHolder = dimGroupEl.querySelector(".param-dim-cards-list");
+
+      for (const pSpec of dimParams) {
+        const comp = compByParamId.get(pSpec.id);
+        if (!comp) continue;
+        const pProv = state.body === "moon" ? pSpec.moon_provenance : pSpec.mars_provenance;
+        const simInfo = classifySimilarity(comp.similarity, comp.weight);
+        const wtPct = (comp.weight * 100).toFixed(1);
+        const isGapFilled = interpSet.has(comp.parameter_id);
+        const isTargetInterp = targetExtrapSet.has(comp.parameter_id);
+        const deltaStr = formatSignedDelta(comp.earth_value, comp.target_value);
+
+        const card = document.createElement("div");
+        card.className = `param-comp-card tier-${simInfo.tier}`;
+        card.innerHTML = `
+          <div class="param-comp-top">
+            <div class="param-comp-title-wrap">
+              <strong class="param-comp-label">${escapeHtml(comp.label)}</strong>
+              <span class="param-comp-unit">(${escapeHtml(comp.unit)})</span>
+              ${isGapFilled ? '<span class="gap-note" title="Spatially interpolated across track gap">Gap-filled</span>' : ""}
+            </div>
+            <div class="param-comp-badges">
+              <span class="param-wt-pill mono-num" title="Normalized active scoring weight">${comp.weight === 0 ? "Off (0%)" : `Wt ${escapeHtml(wtPct)}%`}</span>
+              <span class="param-sim-pill tier-${simInfo.tier} mono-num">${escapeHtml(simInfo.text)}</span>
+            </div>
+          </div>
+          <div class="param-sim-bar-track" aria-hidden="true">
+            <div class="param-sim-bar-fill tier-${simInfo.tier}" style="width: ${simInfo.pct}%;"></div>
+          </div>
+          <div class="param-values-grid">
+            <div class="param-val-box">
+              <span class="param-val-lbl">Earth Site</span>
+              <strong class="param-val-num mono-num">${escapeHtml(formatPhysicalNum(comp.earth_value))} <small>${escapeHtml(comp.unit)}</small></strong>
+            </div>
+            <div class="param-val-box">
+              <span class="param-val-lbl">${escapeHtml(targetBodyUpper)} Target${isTargetInterp ? " · interp." : ""}</span>
+              <strong class="param-val-num mono-num">${escapeHtml(formatPhysicalNum(comp.target_value))} <small>${escapeHtml(comp.unit)}</small></strong>
+            </div>
+            <div class="param-val-box">
+              <span class="param-val-lbl">Δ (Earth − Target)</span>
+              <strong class="param-val-num mono-num">${escapeHtml(deltaStr)} <small>${escapeHtml(comp.unit)}</small></strong>
+            </div>
+          </div>
+          <div class="param-prov-row">
+            <a class="prov-pill" href="${escapeHtml(pSpec.earth_provenance.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(pSpec.earth_provenance.dataset_name)} (${escapeHtml(pSpec.earth_provenance.resolution)})">
+              Earth: ${escapeHtml(pSpec.earth_provenance.agency_mission)} ↗
+            </a>
+            <a class="prov-pill" href="${escapeHtml(pProv.url)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(pProv.dataset_name)} (${escapeHtml(pProv.resolution)})">
+              ${escapeHtml(targetBodyUpper)}: ${escapeHtml(pProv.agency_mission)} ↗
+            </a>
+          </div>
+        `;
+        listHolder.appendChild(card);
+      }
+
+      cardsContainer.appendChild(dimGroupEl);
+    }
+  }
+
   for (const comp of result.parameter_comparisons) {
     const pSpec = state.metadata.parameters.find((p) => p.id === comp.parameter_id);
     const pProv = state.body === "moon" ? pSpec.moon_provenance : pSpec.mars_provenance;
-    const tr = document.createElement("tr");
-    const simText = comp.weight === 0 ? "N/A" : `${Math.round(comp.similarity * 100)}%`;
+    const simInfo = classifySimilarity(comp.similarity, comp.weight);
     const gapNote = interpSet.has(comp.parameter_id) ? '<br/><small class="gap-note">Gap-filled</small>' : "";
+    const deltaStr = formatSignedDelta(comp.earth_value, comp.target_value);
+    const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${escapeHtml(comp.label)}<br/><small>${escapeHtml(comp.unit)}</small></td>
-      <td class="mono-num">${escapeHtml(comp.earth_value)}${gapNote}</td>
-      <td class="mono-num">${escapeHtml(comp.target_value)}</td>
-      <td class="mono-num">${escapeHtml(simText)}</td>
+      <td><strong>${escapeHtml(comp.label)}</strong><br/><small>${escapeHtml(comp.unit)}</small></td>
+      <td class="mono-num">${escapeHtml(formatPhysicalNum(comp.earth_value))}${gapNote}</td>
+      <td class="mono-num">${escapeHtml(formatPhysicalNum(comp.target_value))}<br/><small class="muted-delta">Δ ${escapeHtml(deltaStr)}</small></td>
+      <td class="mono-num"><span class="param-sim-pill tier-${simInfo.tier}">${escapeHtml(simInfo.text)}</span></td>
       <td>
-        <a href="${escapeHtml(pSpec.earth_provenance.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(pSpec.earth_provenance.agency_mission)}</a> /
+        <a href="${escapeHtml(pSpec.earth_provenance.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(pSpec.earth_provenance.agency_mission)}</a><br/>
         <a href="${escapeHtml(pProv.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(pProv.agency_mission)}</a>
       </td>
     `;

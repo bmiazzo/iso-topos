@@ -64,7 +64,8 @@ export function buildAdvancedControls({ collapseCtrl, onScheduleRank, onSyncSumm
   if (!container || !state.metadata) return;
   container.innerHTML = "";
 
-  for (const dim of state.metadata.dimensions) {
+  for (let dimIdx = 0; dimIdx < state.metadata.dimensions.length; dimIdx++) {
+    const dim = state.metadata.dimensions[dimIdx];
     const dimContent = document.createElement("div");
     const dimParams = state.metadata.parameters.filter((p) => p.dimension_id === dim.id);
 
@@ -75,13 +76,18 @@ export function buildAdvancedControls({ collapseCtrl, onScheduleRank, onSyncSumm
       row.className = "param-row";
       row.innerHTML = `
         <div class="param-row-top">
-          <span title="${escapeHtml(p.description)}">${escapeHtml(p.label)} <small>(${escapeHtml(p.unit)})</small></span>
-          <label><input type="checkbox" id="chk-en-${escapeHtml(p.id)}" ${isEnabled ? "checked" : ""} /> Active</label>
+          <span class="param-row-label" title="${escapeHtml(p.description)}">${escapeHtml(p.label)} <small>(${escapeHtml(p.unit)})</small></span>
+          <label class="param-active-toggle"><input type="checkbox" id="chk-en-${escapeHtml(p.id)}" ${isEnabled ? "checked" : ""} /> Active</label>
         </div>
         <div class="param-row-controls">
-          <input type="number" class="param-override-input" id="val-${escapeHtml(p.id)}" step="any" title="Override target value" />
-          <input type="range" id="wt-${escapeHtml(p.id)}" min="0" max="100" step="5" value="${defaultPct}" />
-          <span id="wt-lbl-${escapeHtml(p.id)}">${defaultPct}%</span>
+          <label class="param-field-mini" title="Override target ${escapeHtml(p.label)} (${escapeHtml(p.unit)})">
+            <span class="param-mini-tag">Target</span>
+            <input type="number" class="param-override-input mono-num" id="val-${escapeHtml(p.id)}" step="any" />
+          </label>
+          <div class="param-slider-wrap">
+            <input type="range" id="wt-${escapeHtml(p.id)}" min="0" max="100" step="5" value="${defaultPct}" aria-label="${escapeHtml(p.label)} weight percentage" />
+            <span id="wt-lbl-${escapeHtml(p.id)}" class="param-wt-pct mono-num">${defaultPct}%</span>
+          </div>
         </div>
       `;
       dimContent.appendChild(row);
@@ -136,7 +142,7 @@ export function buildAdvancedControls({ collapseCtrl, onScheduleRank, onSyncSumm
       id: `dim-${dim.id}`,
       title: dim.name,
       level: 3,
-      defaultOpen: false,
+      defaultOpen: dimIdx === 0,
       summaryId: `summary-dim-${dim.id}`,
       summaryText: `${dimParams.length}/${dimParams.length}`,
       summaryVariant: "ok",
@@ -166,9 +172,41 @@ export async function exportAnalogs(format) {
   URL.revokeObjectURL(url);
 }
 
-export function bindAdvancedEvents({ onRank, onScheduleRank, onSyncSummaries }) {
+export function bindAdvancedEvents({ collapseCtrl, onRank, onScheduleRank, onSyncSummaries }) {
   document.getElementById("scoring-mode-select")?.addEventListener("change", (e) => {
     state.scoringMode = e.target.value;
+    onSyncSummaries?.();
+    onRank();
+  });
+
+  document.getElementById("btn-expand-all-dims")?.addEventListener("click", () => {
+    const dimMenus = document.querySelectorAll("#parameter-weights-container .menu-level-3[data-collapse-id]");
+    for (const el of dimMenus) {
+      collapseCtrl?.setOpen(el, true, { persist: true });
+    }
+  });
+
+  document.getElementById("btn-collapse-all-dims")?.addEventListener("click", () => {
+    const dimMenus = document.querySelectorAll("#parameter-weights-container .menu-level-3[data-collapse-id]");
+    for (const el of dimMenus) {
+      collapseCtrl?.setOpen(el, false, { persist: true });
+    }
+  });
+
+  document.getElementById("btn-reset-weights")?.addEventListener("click", () => {
+    if (!state.metadata) return;
+    const rec = state.target?.recommended_weights || {};
+    for (const p of state.metadata.parameters) {
+      const w = rec[p.id] ?? p.default_weight ?? 0.8;
+      state.weights[p.id] = w;
+      const wPct = Math.round(w * 100);
+      const wtSlider = document.getElementById(`wt-${p.id}`);
+      const wtLabel = document.getElementById(`wt-lbl-${p.id}`);
+      const chkEnable = document.getElementById(`chk-en-${p.id}`);
+      if (wtSlider) wtSlider.value = String(wPct);
+      if (wtLabel) wtLabel.textContent = `${wPct}%`;
+      if (chkEnable) chkEnable.checked = wPct > 0;
+    }
     onSyncSummaries?.();
     onRank();
   });

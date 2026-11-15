@@ -5,6 +5,7 @@ import { PALETTES, state } from "../state.js";
 import { escapeHtml, setSpinButtonState } from "../ui/dom.js";
 import {
   bindCesiumCameraInteraction,
+  buildCrispLabelOptions,
   cameraHeightToApproxZoom,
   createAutoSpinController,
   createCesiumViewer,
@@ -286,6 +287,15 @@ export function highlightSelectedSiteOnMap(siteId, explicitCoords = null) {
     } else {
       _beaconBillboard.show = false;
     }
+  }
+
+  if (state.lastRankResponse) {
+    const isScoreLayer = !state.activeLayer.startsWith("raw:");
+    updatePinCollections({
+      topH3Results: state.lastRankResponse.top_h3_results,
+      hotspotResults: state.lastRankResponse.hotspot_results,
+      minPinScore: isScoreLayer ? state.minScoreFilter : 0,
+    });
   }
 }
 
@@ -926,6 +936,8 @@ function updatePinCollections({ topH3Results, hotspotResults, minPinScore }) {
     const rank = idx + 1;
     const scorePct = Math.round(r.overall_score * 100);
     const isTop3 = rank <= 3;
+    const isTop5 = rank <= 5;
+    const isSelected = r.site.id === state.selectedSiteId;
     const pos = Cesium.Cartesian3.fromDegrees(r.site.lon, r.site.lat, PIN_HEIGHT_M);
     const props = {
       id: r.site.id,
@@ -936,24 +948,30 @@ function updatePinCollections({ topH3Results, hotspotResults, minPinScore }) {
       score_pct: scorePct,
       is_top3: isTop3,
     };
+    const pinSize = isSelected ? 28 : isTop3 ? 25 : 19;
     _topH3Billboards.add({
       id: { kind: "top_h3", props },
       position: pos,
-      image: isTop3 ? imgs.top3H3 : imgs.topKH3,
+      image: isTop3 || isSelected ? imgs.top3H3 : imgs.topKH3,
+      width: pinSize,
+      height: pinSize,
+      eyeOffset: new Cesium.Cartesian3(0, 0, isSelected ? -28000 : -18000),
     });
-    _topH3Labels.add({
-      id: { kind: "top_h3", props },
-      position: pos,
-      text: `#${rank} ${shortPinTitle(r.site.name)} (${scorePct}%)`,
-      font: "600 11px system-ui, -apple-system, sans-serif",
-      fillColor: Cesium.Color.fromCssColorString("#ecfeff"),
-      outlineColor: Cesium.Color.fromCssColorString("#040812"),
-      outlineWidth: 3,
-      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-      pixelOffset: new Cesium.Cartesian2(0, -14),
-      distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 2.5e7),
-    });
+    _topH3Labels.add(
+      buildCrispLabelOptions({
+        id: { kind: "top_h3", props },
+        position: pos,
+        text: `#${rank} ${shortPinTitle(r.site.name)} · ${scorePct}%`,
+        isPrimary: isTop5,
+        isSelected,
+        fillColorCss: isSelected ? "#fef08a" : isTop3 ? "#ccfbf1" : "#e0f2fe",
+        bgColorCss: isSelected ? "rgba(8, 25, 42, 0.94)" : "rgba(6, 13, 26, 0.86)",
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        pixelOffsetY: -13,
+        maxDist: isSelected || isTop5 ? 2.6e7 : 1.45e7,
+        fadeStartDist: isSelected || isTop5 ? 1.85e7 : 9.2e6,
+      }),
+    );
   }
 
   _hotspotBillboards.removeAll();
@@ -963,6 +981,8 @@ function updatePinCollections({ topH3Results, hotspotResults, minPinScore }) {
       const r = hotspotResults[idx];
       if (r.overall_score * 100 < minPinScore) continue;
       const scorePct = Math.round(r.overall_score * 100);
+      const isSelected = r.site.id === state.selectedSiteId;
+      const isTopHotspot = idx < 4;
       const pos = Cesium.Cartesian3.fromDegrees(r.site.lon, r.site.lat, PIN_HEIGHT_M);
       const props = {
         id: r.site.id,
@@ -973,24 +993,30 @@ function updatePinCollections({ topH3Results, hotspotResults, minPinScore }) {
         score: r.overall_score,
         score_pct: scorePct,
       };
+      const hsPinSize = isSelected ? 27 : 22;
       _hotspotBillboards.add({
         id: { kind: "hotspot", props },
         position: pos,
         image: r.site.is_well_known ? imgs.hsWellKnown : imgs.hsNovel,
+        width: hsPinSize,
+        height: hsPinSize,
+        eyeOffset: new Cesium.Cartesian3(0, 0, isSelected ? -28000 : -16000),
       });
-      _hotspotLabels.add({
-        id: { kind: "hotspot", props },
-        position: pos,
-        text: `${shortPinTitle(r.site.name)} (${scorePct}%)`,
-        font: "500 10.5px system-ui, -apple-system, sans-serif",
-        fillColor: Cesium.Color.fromCssColorString(r.site.is_well_known ? "#fde68a" : "#bae6fd"),
-        outlineColor: Cesium.Color.fromCssColorString("#040812"),
-        outlineWidth: 3,
-        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-        verticalOrigin: Cesium.VerticalOrigin.TOP,
-        pixelOffset: new Cesium.Cartesian2(0, 12),
-        distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 1.6e7),
-      });
+      _hotspotLabels.add(
+        buildCrispLabelOptions({
+          id: { kind: "hotspot", props },
+          position: pos,
+          text: `${shortPinTitle(r.site.name)} · ${scorePct}%`,
+          isPrimary: isTopHotspot,
+          isSelected,
+          fillColorCss: isSelected ? "#fef08a" : r.site.is_well_known ? "#fde68a" : "#bae6fd",
+          bgColorCss: isSelected ? "rgba(8, 25, 42, 0.94)" : "rgba(7, 12, 24, 0.85)",
+          verticalOrigin: Cesium.VerticalOrigin.TOP,
+          pixelOffsetY: 12,
+          maxDist: isSelected ? 2.6e7 : isTopHotspot ? 1.55e7 : 9.2e6,
+          fadeStartDist: isSelected ? 1.85e7 : isTopHotspot ? 1.0e7 : 5.8e6,
+        }),
+      );
     }
   }
 }

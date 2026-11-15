@@ -531,6 +531,48 @@ def test_resizable_menus_sidebars_and_overlays_contracts():
     assert ".overlay-resizer" in menus_css
 
 
+def test_ui_readability_sidebar_collapse_and_crisp_3d_tags_contracts():
+    """Verify sidebar collapse track decoupling, HiDPI 2x supersampled 3D HUD tags, and readable data inspector."""
+    client = _client()
+
+    layout_css = client.get("/static/styles/layout.css").text
+    assert "--left-track:" in layout_css
+    assert "--right-track:" in layout_css
+    assert "--left-track: 0px !important;" in layout_css
+    assert "--right-track: 0px !important;" in layout_css
+
+    helpers_js = client.get("/static/js/components/cesium_helpers.js").text
+    assert "useBrowserRecommendedResolution: false" in helpers_js
+    assert "viewer.resolutionScale" in helpers_js
+    assert "buildCrispLabelOptions" in helpers_js
+    assert "showBackground: true" in helpers_js
+
+    globe_js = client.get("/static/js/components/globe_map.js").text
+    assert "buildCrispLabelOptions(" in globe_js
+
+    planetary_js = client.get("/static/js/planetary_page.js").text
+    assert "buildCrispLabelOptions(" in planetary_js
+
+    index_html = client.get("/").text
+    assert 'id="target-quick-profile"' not in index_html
+    for expected in (
+        'id="active-site-banner"',
+        'id="btn-wide-right"',
+        'id="right-view-tabs"',
+        'id="detail-comparison-cards"',
+        'id="btn-param-view-cards"',
+        'id="btn-param-view-table"',
+        'id="btn-expand-all-dims"',
+        'id="btn-reset-weights"',
+    ):
+        assert expected in index_html, expected
+
+    breakdown_js = client.get("/static/js/components/breakdown_panel.js").text
+    assert "detail-comparison-cards" in breakdown_js
+    assert "param-comp-card" in breakdown_js
+
+
+
 
 
 

@@ -1,10 +1,26 @@
 /* Dedicated /planetary 3D Moon & Mars Explorer page styles */
 
 .planetary-workspace {
+  --pl-right-track: 440px;
   display: grid;
-  grid-template-columns: 1fr 400px;
+  grid-template-columns: minmax(240px, 1fr) var(--pl-right-track);
   height: calc(100vh - 52px);
   height: calc(100dvh - 52px);
+  overflow: hidden;
+  transition: grid-template-columns 220ms var(--collapse-ease);
+}
+
+.planetary-workspace.right-collapsed {
+  --pl-right-track: 0px !important;
+}
+
+.planetary-workspace.right-collapsed .planetary-sidebar {
+  width: 0 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  opacity: 0;
+  pointer-events: none;
   overflow: hidden;
 }
 

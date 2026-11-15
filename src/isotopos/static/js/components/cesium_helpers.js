@@ -87,10 +87,16 @@ export function createCesiumViewer(
       },
     },
     scene3DOnly: false,
-    useBrowserRecommendedResolution: true,
+    useBrowserRecommendedResolution: false,
   });
 
+  const dpr = typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2.25) : 1;
+  viewer.resolutionScale = dpr;
+
   const { scene, camera } = viewer;
+  if (scene.postProcessStages?.fxaa) {
+    scene.postProcessStages.fxaa.enabled = true;
+  }
   scene.backgroundColor = Cesium.Color.TRANSPARENT;
   scene.globe.baseColor = Cesium.Color.fromCssColorString(baseColor);
   scene.globe.enableLighting = false;
@@ -242,27 +248,38 @@ export function createAutoSpinController({ getViewer, shouldSpin, rateDegPerSec 
   return { requestFrame, start };
 }
 
-export function makePinDataUrl({ fill, stroke = "#ffffff", radius = 8, strokeWidth = 2, glow = false } = {}) {
+export function makePinDataUrl({
+  fill,
+  stroke = "#ffffff",
+  radius = 8,
+  strokeWidth = 2,
+  glow = false,
+  pixelRatio = 2.5,
+} = {}) {
   const pad = glow ? 8 : 3;
-  const size = (radius + strokeWidth + pad) * 2;
+  const logicalSize = (radius + strokeWidth + pad) * 2;
+  const scale = Math.max(1, pixelRatio);
+  const size = Math.round(logicalSize * scale);
   const c = size / 2;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
+  ctx.scale(scale, scale);
 
+  const lc = logicalSize / 2;
   if (glow) {
-    const grad = ctx.createRadialGradient(c, c, radius * 0.4, c, c, radius + pad);
+    const grad = ctx.createRadialGradient(lc, lc, radius * 0.4, lc, lc, radius + pad);
     grad.addColorStop(0, `${fill}99`);
     grad.addColorStop(1, `${fill}00`);
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(c, c, radius + pad, 0, Math.PI * 2);
+    ctx.arc(lc, lc, radius + pad, 0, Math.PI * 2);
     ctx.fill();
   }
 
   ctx.beginPath();
-  ctx.arc(c, c, radius, 0, Math.PI * 2);
+  ctx.arc(lc, lc, radius, 0, Math.PI * 2);
   ctx.fillStyle = fill;
   ctx.fill();
   ctx.lineWidth = strokeWidth;
@@ -270,6 +287,53 @@ export function makePinDataUrl({ fill, stroke = "#ffffff", radius = 8, strokeWid
   ctx.stroke();
 
   return canvas.toDataURL("image/png");
+}
+
+/**
+ * Build 2x-supersampled HUD pill label options for Cesium.LabelCollection so 3D globe tags
+ * render with razor-sharp glyph edges, high-contrast translucent pill backdrops, and smooth zoom LOD.
+ */
+export function buildCrispLabelOptions({
+  id,
+  position,
+  text,
+  isPrimary = false,
+  isSelected = false,
+  fillColorCss = "#f0f9ff",
+  bgColorCss = "rgba(6, 11, 22, 0.86)",
+  verticalOrigin = null,
+  pixelOffsetY = -14,
+  maxDist = 2.5e7,
+  fadeStartDist = null,
+} = {}) {
+  const Cesium = window.Cesium;
+  const fontPx = isSelected ? 25 : isPrimary ? 24 : 22;
+  const fontWeight = isSelected || isPrimary ? 700 : 600;
+  const nearScale = isSelected ? 0.56 : isPrimary ? 0.52 : 0.48;
+  const farScale = isSelected ? 0.48 : isPrimary ? 0.42 : 0.38;
+  const fadeStart = fadeStartDist ?? maxDist * 0.62;
+
+  return {
+    id,
+    position,
+    text,
+    font: `${fontWeight} ${fontPx}px "IBM Plex Sans", "Inter", system-ui, -apple-system, sans-serif`,
+    scale: nearScale,
+    fillColor: Cesium.Color.fromCssColorString(fillColorCss),
+    outlineColor: Cesium.Color.fromCssColorString("#020617"),
+    outlineWidth: 3.5,
+    style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+    showBackground: true,
+    backgroundColor: Cesium.Color.fromCssColorString(bgColorCss),
+    backgroundPadding: new Cesium.Cartesian2(12, 7),
+    verticalOrigin: verticalOrigin ?? Cesium.VerticalOrigin.BOTTOM,
+    horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+    pixelOffset: new Cesium.Cartesian2(0, pixelOffsetY),
+    eyeOffset: new Cesium.Cartesian3(0, 0, isSelected ? -32000 : -22000),
+    scaleByDistance: new Cesium.NearFarScalar(1.4e6, nearScale, maxDist, farScale),
+    translucencyByDistance: new Cesium.NearFarScalar(fadeStart, 1.0, maxDist, 0.0),
+    distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, maxDist),
+  };
 }
 
 /**
