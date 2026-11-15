@@ -23,7 +23,7 @@ const PLANETARY_TILES = {
     fallbackRamp: [[34, 40, 50], [168, 176, 190]],
     radiusEquatorial: 1737400,
     radiusPolar: 1737400,
-    defaultBasemap: "lola_shade",
+    defaultBasemap: "wac_hybrid",
     basemaps: {
       lola_shade: {
         label: "Basemap: LOLA Shaded Relief",
@@ -728,7 +728,7 @@ async function mountPlanetaryViewer(body) {
   _fallbackLayer = viewer.imageryLayers.addImageryProvider(fallbackProvider);
   _fallbackLayer.alpha = 0.94;
 
-  // Layer 1+: NASA Solar System Treks EPSG:4326 WMTS basemap (Moon defaults to LOLA Shaded Relief for clean poles)
+  // Layer 1+: NASA Solar System Treks EPSG:4326 WMTS basemap (Moon defaults to LRO WAC + LOLA Polar Fill)
   applyBasemapLayers(body);
 
   // Top Layer: Parameter overlay layer (equirectangular -90..+90)

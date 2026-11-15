@@ -45,6 +45,11 @@ import { state } from "./js/state.js";
 import { MenuCollapseController, SidebarController } from "./js/ui/collapsible.js";
 import { prefersReducedMotion, setButtonPressed, setSpinButtonState } from "./js/ui/dom.js";
 import { updateAllMenuSummaries } from "./js/ui/menu_summaries.js";
+import {
+  MenuResizeController,
+  OverlayResizeController,
+  SidebarResizeController,
+} from "./js/ui/resizable.js";
 
 const collapseCtrl = new MenuCollapseController();
 const sidebarCtrl = new SidebarController({
@@ -57,6 +62,54 @@ const sidebarCtrl = new SidebarController({
     resizeEarthMap();
     resizeDimensionChart();
   },
+});
+
+const sidebarResizeCtrl = new SidebarResizeController({
+  workspaceEl: document.getElementById("workspace"),
+  onLayoutChange: () => {
+    resizeEarthMap();
+    resizeDimensionChart();
+  },
+  specs: [
+    {
+      key: "left",
+      handleEl: document.getElementById("resizer-left"),
+      side: "left",
+      cssVar: "--left-width",
+      defaultWidth: 330,
+      minWidth: 240,
+      maxWidth: 640,
+      minCenterWidth: 260,
+      oppositeCssVar: "--right-width",
+      oppositeDefault: 410,
+      oppositeCollapsedClass: "right-collapsed",
+    },
+    {
+      key: "right",
+      handleEl: document.getElementById("resizer-right"),
+      side: "right",
+      cssVar: "--right-width",
+      defaultWidth: 410,
+      minWidth: 280,
+      maxWidth: 760,
+      minCenterWidth: 260,
+      oppositeCssVar: "--left-width",
+      oppositeDefault: 330,
+      oppositeCollapsedClass: "left-collapsed",
+    },
+  ],
+});
+
+const menuResizeCtrl = new MenuResizeController({
+  onMenuResize: (id) => {
+    if (id === "detail-chart" || id === "site-breakdown") {
+      requestAnimationFrame(() => resizeDimensionChart());
+    }
+  },
+});
+
+const overlayResizeCtrl = new OverlayResizeController({
+  stageEl: document.getElementById("main-stage"),
 });
 
 function syncMenuSummaries() {
@@ -337,7 +390,10 @@ async function init() {
   state.autoSpin = !prefersReducedMotion();
   setSpinButtonState(document.getElementById("btn-toggle-spin"), state.autoSpin);
   sidebarCtrl.init();
+  sidebarResizeCtrl.init();
   collapseCtrl.registerContainer(document);
+  menuResizeCtrl.registerContainer(document);
+  overlayResizeCtrl.registerContainer(document);
   collapseCtrl.onToggle("detail-chart", (isOpen) => {
     if (isOpen) requestAnimationFrame(() => resizeDimensionChart());
   });

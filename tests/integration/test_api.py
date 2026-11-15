@@ -199,6 +199,7 @@ def test_frontend_static_modules_and_collapsible_shell_served():
         "/static/js/api.js",
         "/static/js/ui/dom.js",
         "/static/js/ui/collapsible.js",
+        "/static/js/ui/resizable.js",
         "/static/js/ui/menu_summaries.js",
         "/static/js/components/starfield.js",
         "/static/js/components/cesium_helpers.js",
@@ -441,7 +442,7 @@ def test_rank_gzip_uses_fast_compression_and_stays_under_budget():
 
 
 def test_cesium_zoom_and_moon_polar_basemap_contracts():
-    """Verify CesiumJS zoom fixes, shared camera interaction helper, and polar-clean LOLA Moon basemap."""
+    """Verify CesiumJS zoom fixes, shared camera interaction helper, and LRO WAC + LOLA default Moon basemap."""
     client = _client()
 
     planetary_html = client.get("/planetary").text
@@ -455,7 +456,7 @@ def test_cesium_zoom_and_moon_polar_basemap_contracts():
     assert "if (factor > 1)" in helpers_js
 
     planetary_js = client.get("/static/js/planetary_page.js").text
-    assert 'defaultBasemap: "lola_shade"' in planetary_js
+    assert 'defaultBasemap: "wac_hybrid"' in planetary_js
     assert "LRO_LOLA_Shade_Global_128ppd_v04" in planetary_js
     assert "LRO_LOLA_ClrShade_Global_128ppd_v04" in planetary_js
     assert "LRO_WAC_Mosaic_Global_303ppd_v02" in planetary_js
@@ -466,6 +467,70 @@ def test_cesium_zoom_and_moon_polar_basemap_contracts():
 
     globe_js = client.get("/static/js/components/globe_map.js").text
     assert "bindCesiumCameraInteraction(" in globe_js
+
+
+def test_favicon_and_html_icon_links():
+    """Serve /favicon.ico and /static/favicon.svg cleanly and wire icon links in both HTML pages."""
+    client = _client()
+
+    ico_resp = client.get("/favicon.ico")
+    assert ico_resp.status_code == 200
+    assert ico_resp.headers.get("content-type", "").startswith(("image/x-icon", "image/vnd.microsoft.icon"))
+    assert "max-age=" in ico_resp.headers.get("cache-control", "")
+    assert ico_resp.content[:4] == b"\x00\x00\x01\x00"
+    assert len(ico_resp.content) > 100
+
+    svg_resp = client.get("/static/favicon.svg")
+    assert svg_resp.status_code == 200
+    assert "image/svg+xml" in svg_resp.headers.get("content-type", "")
+    assert "<svg" in svg_resp.text
+
+    for page_path in ("/", "/planetary"):
+        html_resp = client.get(page_path)
+        assert html_resp.status_code == 200
+        assert 'href="/static/favicon.svg"' in html_resp.text
+        assert 'href="/favicon.ico"' in html_resp.text
+
+
+def test_resizable_menus_sidebars_and_overlays_contracts():
+    """Verify accessible splitter handles, overlay resizers, and resizable menu wiring on / while /planetary remains unchanged."""
+    client = _client()
+
+    index_html = client.get("/").text
+    for expected in (
+        'id="resizer-left"',
+        'id="resizer-right"',
+        'role="separator"',
+        'aria-orientation="vertical"',
+        'data-resize-overlay="globe-layers"',
+        'data-resize-overlay="globe-legend"',
+    ):
+        assert expected in index_html, expected
+
+    planetary_html = client.get("/planetary").text
+    for removed in (
+        'id="pl-resizer"',
+        'data-resize-overlay="pl-legend"',
+        'data-resize-card="pl-card-target"',
+    ):
+        assert removed not in planetary_html, removed
+
+    resizable_js = client.get("/static/js/ui/resizable.js")
+    assert resizable_js.status_code == 200
+    for symbol in (
+        "SidebarResizeController",
+        "MenuResizeController",
+        "OverlayResizeController",
+    ):
+        assert symbol in resizable_js.text, symbol
+
+    layout_css = client.get("/static/styles/layout.css").text
+    menus_css = client.get("/static/styles/menus.css").text
+    assert ".workspace-resizer" in layout_css
+    assert ".menu-resize-handle" in menus_css
+    assert ".overlay-resizer" in menus_css
+
+
 
 
 

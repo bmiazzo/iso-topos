@@ -761,10 +761,22 @@ export function initEarthMap({ onInspectSite }) {
   });
 
   mapCanvas.addEventListener("mouseleave", hideTooltip);
-  window.addEventListener("resize", () => {
+  const syncStageSize = () => {
     cachedStageW = mapContainer.clientWidth || 800;
     cachedStageH = mapContainer.clientHeight || 600;
-  });
+  };
+  window.addEventListener("resize", syncStageSize);
+  if (typeof ResizeObserver !== "undefined") {
+    let stageResizeRaf = 0;
+    new ResizeObserver(() => {
+      if (stageResizeRaf) return;
+      stageResizeRaf = requestAnimationFrame(() => {
+        stageResizeRaf = 0;
+        syncStageSize();
+        if (!viewer.isDestroyed()) viewer.resize();
+      });
+    }).observe(mapContainer);
+  }
 
   state.map = viewer;
   state.mapReady = true;

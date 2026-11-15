@@ -68,6 +68,17 @@ def create_app(
             return FileResponse(planetary_path)
         raise HTTPException(status_code=404, detail="Planetary selector page not found.")
 
+    @application.get("/favicon.ico", include_in_schema=False)
+    def serve_favicon() -> Response:
+        favicon_path = static_dir / "favicon.ico"
+        if favicon_path.exists():
+            return FileResponse(
+                favicon_path,
+                media_type="image/x-icon",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        return Response(status_code=204)
+
     @application.get("/api/v1/health")
     def health() -> dict[str, Any]:
         return {

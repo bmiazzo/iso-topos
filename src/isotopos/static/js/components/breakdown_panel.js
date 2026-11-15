@@ -6,9 +6,25 @@ import { highlightSelectedSiteOnMap } from "./globe_map.js";
 
 let photoReqSeq = 0;
 const wikiGeoPhotoCache = {};
+let chartResizeObserverBound = false;
 
 export function resizeDimensionChart() {
   state.chart?.resize();
+}
+
+function ensureChartResizeObserver() {
+  if (chartResizeObserverBound || typeof ResizeObserver === "undefined") return;
+  const wrap = document.querySelector(".chart-wrap");
+  if (!wrap) return;
+  chartResizeObserverBound = true;
+  let rafId = 0;
+  new ResizeObserver(() => {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      resizeDimensionChart();
+    });
+  }).observe(wrap);
 }
 
 export function getActiveTabPool(rankResponse, tab = state.activeTab) {
@@ -281,6 +297,7 @@ export function showBreakdown(result, { collapseCtrl, onSelectSite }) {
         plugins: { legend: { display: false } },
       },
     });
+    ensureChartResizeObserver();
   }
 
   // Relevance

@@ -44,20 +44,23 @@ def _extract_json_dict(raw_text: str) -> dict[str, Any]:
     return parsed
 
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+
 class GeminiRESTClient:
     """Google Gemini REST API client using httpx."""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.5-flash",
+        model: str = DEFAULT_GEMINI_MODEL,
         timeout_s: float = 30.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if not api_key.strip():
             raise LLMConfigurationError("Gemini API key cannot be empty.")
         self._api_key = api_key.strip()
-        self._model = model.strip() or "gemini-2.5-flash"
+        self._model = model.strip() or DEFAULT_GEMINI_MODEL
         self._timeout_s = timeout_s
         self._transport = transport
 
@@ -168,7 +171,7 @@ def resolve_llm_client() -> LLMClient:
     """Resolve the configured AI model client from environment variables."""
     gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
     if gemini_key:
-        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+        model = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
         return GeminiRESTClient(api_key=gemini_key, model=model)
 
     openai_key = os.getenv("OPENAI_API_KEY", "").strip()

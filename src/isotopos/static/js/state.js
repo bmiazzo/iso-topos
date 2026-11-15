@@ -1,6 +1,7 @@
 // Central reactive application state and visualization constants
 
 export const COLLAPSE_STORAGE_KEY = "isotopos.ui.collapse.v1";
+export const RESIZE_STORAGE_KEY = "isotopos.ui.resize.v1";
 
 export const PALETTES = {
   bioluminescent: [

@@ -178,7 +178,12 @@
 }
 
 .map-overlay-card.top-left-overlay {
+  position: relative;
   width: 266px;
+}
+
+.map-overlay-card.top-left-overlay.is-resized-w:not(.is-collapsed) {
+  width: var(--overlay-width, 266px);
 }
 
 .map-overlay-card.top-left-overlay.is-collapsed {
@@ -193,7 +198,216 @@
   width: 236px;
 }
 
+.map-overlay-card.bottom-left-overlay.is-resized-w:not(.is-collapsed) {
+  width: var(--overlay-width, 236px);
+}
+
 .map-overlay-card.bottom-left-overlay.is-collapsed {
   width: auto;
   min-width: 168px;
+}
+
+/* Vertical menu resize handle (Level-1, Level-2 & /planetary cards) */
+.menu-resize-handle {
+  position: relative;
+  height: 9px;
+  margin: 4px -4px -5px;
+  cursor: row-resize;
+  touch-action: none;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.menu-resize-handle::after {
+  content: "";
+  width: 34px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(147, 166, 197, 0.24);
+  transition: width 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.menu-resize-handle:hover::after,
+.menu-resize-handle:focus-visible::after,
+.menu-resize-handle.is-active::after {
+  width: 58px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.45);
+}
+
+.menu-resize-handle:focus-visible {
+  outline: none;
+}
+
+.collapsible-menu.is-collapsed > .menu-resize-handle,
+.collapsible-menu.is-collapsed > .overlay-resizer {
+  display: none;
+}
+
+.collapsible-menu.is-resizing > .collapse-body {
+  transition: none;
+}
+
+.collapsible-menu.is-resized:not(.is-collapsed) > .collapse-body > .collapse-inner {
+  height: var(--menu-body-height);
+  max-height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.collapsible-menu.is-resized:not(.is-collapsed) > .collapse-body > .collapse-inner::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.collapsible-menu.is-resized:not(.is-collapsed) > .collapse-body > .collapse-inner > * {
+  flex-shrink: 0;
+}
+
+[data-collapse-id="ranked-analogs"].is-resized:not(.is-collapsed) .ranked-list {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 80px;
+}
+
+[data-collapse-id="detail-provenance"].is-resized:not(.is-collapsed) .table-scroll {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 80px;
+}
+
+[data-collapse-id="detail-chart"].is-resized:not(.is-collapsed) .chart-wrap {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 110px;
+}
+
+[data-collapse-id="planetary-picker"].is-resized:not(.is-collapsed) .planetary-picker-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+[data-collapse-id="planetary-picker"].is-resized:not(.is-collapsed) #planetary-picker-canvas {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 90px;
+}
+
+/* Floating globe overlay edge & corner resize handles */
+.map-overlay-card.is-resized-h:not(.is-collapsed) > .collapse-body > .collapse-inner {
+  height: var(--overlay-height);
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.map-overlay-card.is-resized-h:not(.is-collapsed) > .collapse-body > .collapse-inner::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.overlay-resizer {
+  position: absolute;
+  z-index: 12;
+  touch-action: none;
+  user-select: none;
+}
+
+.overlay-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.overlay-resizer-e {
+  top: 8px;
+  bottom: 12px;
+  right: -3px;
+  width: 7px;
+  cursor: ew-resize;
+}
+
+.overlay-resizer-s {
+  left: 10px;
+  right: 12px;
+  bottom: -3px;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+.overlay-resizer-n {
+  left: 10px;
+  right: 12px;
+  top: -3px;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+.overlay-resizer-se {
+  right: 1px;
+  bottom: 1px;
+  width: 13px;
+  height: 13px;
+  cursor: nwse-resize;
+}
+
+.overlay-resizer-ne {
+  right: 1px;
+  top: 1px;
+  width: 13px;
+  height: 13px;
+  cursor: nesw-resize;
+}
+
+.overlay-resizer-se::after,
+.overlay-resizer-ne::after {
+  content: "";
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid rgba(147, 166, 197, 0.45);
+  transition: border-color 140ms ease;
+}
+
+.overlay-resizer-se::after {
+  right: 2px;
+  bottom: 2px;
+  border-bottom: 2px solid rgba(147, 166, 197, 0.45);
+  border-bottom-right-radius: 3px;
+}
+
+.overlay-resizer-ne::after {
+  right: 2px;
+  top: 2px;
+  border-top: 2px solid rgba(147, 166, 197, 0.45);
+  border-top-right-radius: 3px;
+}
+
+.overlay-resizer-se:hover::after,
+.overlay-resizer-se.is-active::after,
+.overlay-resizer-ne:hover::after,
+.overlay-resizer-ne.is-active::after {
+  border-color: var(--accent);
+}
+
+.overlay-resizer-e:hover,
+.overlay-resizer-e.is-active {
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.35));
+  border-radius: 0 8px 8px 0;
+}
+
+.overlay-resizer-s:hover,
+.overlay-resizer-s.is-active,
+.overlay-resizer-n:hover,
+.overlay-resizer-n.is-active {
+  background: rgba(56, 189, 248, 0.35);
+  border-radius: 4px;
 }

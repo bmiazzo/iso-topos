@@ -166,6 +166,7 @@ def test_gemini_and_openai_clients_with_mock_transport(monkeypatch: pytest.Monke
 
     def gemini_handler(request: httpx.Request) -> httpx.Response:
         assert "generativelanguage.googleapis.com" in str(request.url)
+        assert "gemini-3.8-flash:generateContent" in str(request.url)
         body = json.loads(request.content.decode("utf-8"))
         assert "systemInstruction" in body
         return httpx.Response(
@@ -183,7 +184,7 @@ def test_gemini_and_openai_clients_with_mock_transport(monkeypatch: pytest.Monke
 
     gemini_client = GeminiRESTClient(
         api_key="test-gemini-key",
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         transport=httpx.MockTransport(gemini_handler),
     )
     result = evaluate_mission_weights(
@@ -283,9 +284,12 @@ def test_llm_client_validation_errors_and_env_resolution(monkeypatch):
 
     # Environment variable resolution selects Gemini vs OpenAI cleanly
     monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
-    assert isinstance(resolve_llm_client(), GeminiRESTClient)
+    default_gem = resolve_llm_client()
+    assert isinstance(default_gem, GeminiRESTClient)
+    assert default_gem._model == "gemini-3.8-flash"
 
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "o-key")

@@ -201,7 +201,7 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 
 ## DEC-016: Codebase Consolidation, LOLA Shaded Relief Moon Default, and CesiumJS 2D/3D Zoom Fixes
 - **Date:** 2026-11-15
-- **Status:** Accepted
+- **Status:** Accepted (Default Moon basemap choice superseded by DEC-017)
 - **Context:** Consolidating `main` and `feat/cesiumjs-globe` onto `feat/consolidate-globe-fixes` revealed three UX/hygiene issues: (1) NASA Moon Trek optical `LRO_WAC_Mosaic_Global_303ppd_v02` tiles have heavy permanent polar solar shadows (`86%` near-black pixels in polar tiles like `5/31/0.jpg`) causing dark/streaked lunar poles, compounded by asymmetric south/north pole normalization in `buildPoleNormalizedRows` and unguarded concurrent `replaceSingleTileLayer` calls; (2) CesiumJS zoom got blocked/inverted due to high `minimumZoomDistance` (`0.004 * R`) and `80 km` flight floor, clamp-direction inversion inside `zoomViewerByFactor` when near bounds, `cameraHeightToApproxZoom` reading constant height in `SCENE2D`, default `camera.percentageChanged = 0.5` suppressing outline/spin updates during small wheel zooms, and portrait-mismatched `SCENE2D` frustum span math; and (3) duplicate Cesium `ScreenSpaceEventHandler` wiring across `globe_map.js` and `planetary_page.js`, outdated `README.md` MapLibre references, and tracked `.coverage`/`.pyc` files.
 - **Options Considered:**
   1. Keep `LRO_WAC_Mosaic_Global_303ppd_v02` solely and brighten/gamma-stretch dark polar optical pixels client-side.
@@ -209,6 +209,28 @@ A chronological log of important architectural, scientific, dataset, tooling, an
 - **Decision:** Adopt Option 2. Laser-altimetry LOLA shaded relief eliminates solar-shadow polar blackness authentically using verified NASA Moon Trek `EPSG:4326` tiles while preserving optional color-coded elevation and blended optical views.
 - **Consequences:** Earth & Moon/Mars globes share one interaction lifecycle helper (`bindCesiumCameraInteraction`), support ~8x closer zooming (`0.0005 * R`) without `2D`/`3D` direction inversion or `SCENE2D` zoom-reading freeze, and keep the repository free of committed bytecode/coverage caches.
 - **Related:** `DEC-014`, `DEC-015`, `src/isotopos/static/js/components/cesium_helpers.js`, `src/isotopos/static/js/planetary_page.js`, `src/isotopos/static/js/components/globe_map.js`, `lessons-learned/2026-11-15-lunar-polar-shadows-and-cesium-zoom-clamps.md`
+
+## DEC-017: Set LRO WAC + LOLA Polar Fill (`wac_hybrid`) as Default Moon 3D View
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** While `DEC-016` defaulted `/planetary` Moon rendering to `lola_shade` (`LRO_LOLA_Shade_Global_128ppd_v04`) for shadow-free polar relief, users expect the optical LROC/LRO WAC mosaic (`LRO_WAC_Mosaic_Global_303ppd_v02`) to appear immediately when opening the 3D Moon explorer, with LOLA shaded relief preserved underneath for polar coverage.
+- **Options Considered:**
+  1. Keep `lola_shade` as default and require manual basemap switching to `wac_hybrid`.
+  2. Set `PLANETARY_TILES.moon.defaultBasemap` to `"wac_hybrid"` (`LRO_WAC_Mosaic_Global_303ppd_v02` at `alpha: 0.72` layered over `LRO_LOLA_Shade_Global_128ppd_v04`), keeping `lola_shade` and `lola_clr` selectable in `#pl-basemap-select`.
+- **Decision:** Adopt Option 2. Opening `/planetary` on Moon now defaults to `wac_hybrid` (`Basemap: LRO WAC + LOLA Polar Fill`), showing LRO WAC surface imagery by default while still filling polar shadows with the LOLA shaded relief underlay.
+- **Consequences:** `plState.basemapByBody.moon` and `#pl-basemap-select` initialize to `"wac_hybrid"`; `test_cesium_zoom_and_moon_polar_basemap_contracts` updated to assert `defaultBasemap: "wac_hybrid"`.
+- **Related:** `DEC-016`, `src/isotopos/static/js/planetary_page.js`, `tests/integration/test_api.py`
+
+## DEC-018: Declarative Pointer & Keyboard Resizing for Earth UI Sidebars, Menus, and Floating Globe Overlays
+- **Date:** 2026-11-15
+- **Status:** Accepted
+- **Context:** While `DEC-009` introduced collapsible Level-1/2/3 menus and collapsible sidebars on `/`, sidebar widths (`330px`/`410px`), floating globe overlays (`Globe Layers`, `Globe Legend`), and inner scrollable menus (`Ranked Earth Analogs`, `Dimension Similarity` chart, `Data Sources & Parameter Comparison` table, `Planetary Map Picker`) remained fixed-size.
+- **Options Considered:**
+  1. Rely on native CSS `resize: both` alone — lacks sidebar grid splitters, collapses awkwardly with CSS Grid `0fr` animations, lacks `localStorage` persistence, and lacks keyboard separator accessibility.
+  2. Implement dedicated zero-dependency ES module controllers in `js/ui/resizable.js` (`SidebarResizeController`, `MenuResizeController`, `OverlayResizeController`) using Pointer Events (`setPointerCapture`), keyboard `role="separator"` navigation, double-click reset, `ResizeObserver` canvas/chart syncing, and `localStorage` persistence (`isotopos.ui.resize.v1`) on `/` while leaving `/planetary` in its existing fixed-layout state.
+- **Decision:** Adopt Option 2. On `/`, sidebars resize horizontally via `.workspace-resizer` grid splitters; Level-1/2 collapsible menus resize vertically via `.menu-resize-handle` with flex-stretching list/chart/table viewports; floating globe overlays resize in 2D via edge/corner `.overlay-resizer` handles without breaking collapse transitions.
+- **Consequences:** `state.js` exports `RESIZE_STORAGE_KEY`; `starfield.js`, `globe_map.js`, `breakdown_panel.js`, and `planetary_picker.js` react dynamically via `ResizeObserver` without requiring `window` resize events; `/planetary` remains untouched.
+- **Related:** `DEC-009`, `src/isotopos/static/js/ui/resizable.js`, `src/isotopos/static/styles/layout.css`, `src/isotopos/static/styles/menus.css`
 
 
 

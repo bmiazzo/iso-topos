@@ -44,4 +44,14 @@ export function initStarfield() {
 
   renderStars();
   window.addEventListener("resize", renderStars);
+  if (typeof ResizeObserver !== "undefined" && canvas.parentElement) {
+    let rafId = 0;
+    new ResizeObserver(() => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        renderStars();
+      });
+    }).observe(canvas.parentElement);
+  }
 }

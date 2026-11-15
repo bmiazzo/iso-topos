@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark" />
   <title>iso-topos — Planetary-to-Earth Analog Discovery</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
   <link rel="preconnect" href="https://unpkg.com" crossorigin />
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
   <link rel="preconnect" href="https://gibs.earthdata.nasa.gov" crossorigin />
@@ -219,6 +221,19 @@
       </section>
     </aside>
 
+    <div
+      id="resizer-left"
+      class="workspace-resizer workspace-resizer-left"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      aria-label="Resize Mission Controls sidebar"
+      aria-valuemin="240"
+      aria-valuemax="640"
+      aria-valuenow="330"
+      title="Drag to resize Mission Controls · Double-click to reset"
+    ></div>
+
     <!-- Center 3D Earth Globe -->
     <section id="main-stage" class="map-stage" tabindex="-1" aria-label="Interactive 3D Earth Globe">
       <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
@@ -240,7 +255,7 @@
         </button>
 
         <!-- Floating Layer & Visual Switcher (Collapsed by default) -->
-        <section class="map-overlay-card top-left-overlay collapsible-menu is-collapsed" data-collapse-id="globe-layers" data-collapse-default="closed">
+        <section class="map-overlay-card top-left-overlay collapsible-menu is-collapsed" data-collapse-id="globe-layers" data-collapse-default="closed" data-resize-overlay="globe-layers" data-resize-anchor="top-left">
           <button type="button" class="collapse-trigger" aria-expanded="false">
             <span class="collapse-title-wrap">
               <span class="chevron">▾</span>
@@ -317,7 +332,7 @@
       </div>
 
       <!-- Dynamic Color Legend (Open by default, collapsible) -->
-      <section class="map-overlay-card bottom-left-overlay collapsible-menu" data-collapse-id="globe-legend" data-collapse-default="open">
+      <section class="map-overlay-card bottom-left-overlay collapsible-menu" data-collapse-id="globe-legend" data-collapse-default="open" data-resize-overlay="globe-legend" data-resize-anchor="bottom-left">
         <button type="button" class="collapse-trigger" aria-expanded="true">
           <span class="collapse-title-wrap">
             <span class="chevron">▾</span>
@@ -345,6 +360,19 @@
 
       <div id="hover-tooltip" class="hover-tooltip hidden"></div>
     </section>
+
+    <div
+      id="resizer-right"
+      class="workspace-resizer workspace-resizer-right"
+      role="separator"
+      tabindex="0"
+      aria-orientation="vertical"
+      aria-label="Resize Analog Results sidebar"
+      aria-valuemin="280"
+      aria-valuemax="760"
+      aria-valuenow="410"
+      title="Drag to resize Analog Results · Double-click to reset"
+    ></div>
 
     <!-- Right Breakdown & Rankings Drawer -->
     <aside id="right-panel" class="panel right-panel no-scrollbar">

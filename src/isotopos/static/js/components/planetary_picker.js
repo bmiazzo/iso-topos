@@ -2,22 +2,32 @@
 
 import { state } from "../state.js";
 
+let pickerResizeObserverBound = false;
+
 export function drawPlanetaryPicker() {
   const canvas = document.getElementById("planetary-picker-canvas");
   if (!canvas || !state.metadata) return;
+  const rectW = Math.round(canvas.clientWidth);
+  const rectH = Math.round(canvas.clientHeight);
+  if (rectW >= 100 && rectH >= 60 && (canvas.width !== rectW || canvas.height !== rectH)) {
+    canvas.width = rectW;
+    canvas.height = rectH;
+  }
   const ctx = canvas.getContext("2d");
   const w = canvas.width;
   const h = canvas.height;
+  const sx = w / 300;
+  const sy = h / 150;
 
   ctx.fillStyle = state.body === "moon" ? "#1e2430" : "#3a1e16";
   ctx.fillRect(0, 0, w, h);
 
   ctx.fillStyle = state.body === "moon" ? "rgba(15, 18, 26, 0.45)" : "rgba(95, 42, 24, 0.35)";
   for (let i = 0; i < 18; i++) {
-    const rx = ((i * 73) % 280) + 10;
-    const ry = ((i * 41) % 120) + 15;
+    const rx = (((i * 73) % 280) + 10) * sx;
+    const ry = (((i * 41) % 120) + 15) * sy;
     ctx.beginPath();
-    ctx.arc(rx, ry, 10 + (i % 14), 0, Math.PI * 2);
+    ctx.arc(rx, ry, (10 + (i % 14)) * Math.min(sx, sy), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -71,6 +81,19 @@ export function drawPlanetaryPicker() {
 }
 
 export function bindPlanetaryPickerEvents({ onSelectPreset, onExtractCoordinate }) {
+  const pickerCanvas = document.getElementById("planetary-picker-canvas");
+  if (pickerCanvas && !pickerResizeObserverBound && typeof ResizeObserver !== "undefined") {
+    pickerResizeObserverBound = true;
+    let rafId = 0;
+    new ResizeObserver(() => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        drawPlanetaryPicker();
+      });
+    }).observe(pickerCanvas);
+  }
+
   document.getElementById("chk-show-missions")?.addEventListener("change", (e) => {
     state.showMissions = e.target.checked;
     drawPlanetaryPicker();
