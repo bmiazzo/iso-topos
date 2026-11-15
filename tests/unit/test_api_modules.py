@@ -64,6 +64,9 @@ def test_datastore_synthetic_fallback_on_empty_directory(tmp_path: Path):
     assert len(store.h3_sites) > 0
     assert len(store.hotspots) == 26
     assert len(store.presets) == 12
+    uyuni = next(h for h in store.hotspots if h.id == "salar_de_uyuni")
+    assert uyuni.country == "Bolivia"
+    assert uyuni.photo_url is not None and uyuni.photo_url.startswith("https://")
     extracted = store.interpolator.extract_coordinate(PlanetaryBody.MOON, lat=0.0, lon=0.0)
     assert extracted.is_extrapolated is True
 
@@ -73,3 +76,30 @@ def test_get_default_datastore_returns_cached_singleton():
     s1 = get_default_datastore()
     s2 = get_default_datastore()
     assert s1 is s2
+
+
+def test_export_empty_results_and_datastore_cached_json_payloads(tmp_path: Path):
+    """Empty CSV export preserves headers cleanly and DataStore caches plain + gzip JSON bytes."""
+    import gzip
+    import json
+
+    store = DataStore(data_dir=tmp_path, fallback_max_cells=12, fallback_step_deg=45.0)
+    raw_a, gz_a = store.get_cached_json_payload("earth_grid", lambda: store.earth_geojson)
+    raw_b, gz_b = store.get_cached_json_payload("earth_grid", lambda: {"should": "not_recompute"})
+    assert raw_a is raw_b
+    assert gz_a is gz_b
+    assert json.loads(raw_a.decode("utf-8")) == store.earth_geojson
+    assert json.loads(gzip.decompress(gz_a).decode("utf-8")) == store.earth_geojson
+
+    target = store.interpolator.extract_preset("shackleton_rim")
+    empty_resp = export_ranked_analogs(
+        fmt="csv",
+        target=target,
+        mode="clamped",
+        results=[],
+        registry=DEFAULT_REGISTRY,
+    )
+    lines = empty_resp.body.decode("utf-8").strip().splitlines()
+    assert len(lines) == 1
+    assert "site_id" in lines[0]
+

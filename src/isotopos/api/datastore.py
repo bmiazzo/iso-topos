@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import functools
+import gzip
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from isotopos.core.models import EarthSite, PlanetaryBody, TargetPreset
 from isotopos.core.registry import DEFAULT_REGISTRY, ParameterRegistry
 from isotopos.etl.catalog_data import EARTH_HOTSPOTS, PLANETARY_PRESETS
 from isotopos.etl.interpolator import PlanetaryGridInterpolator
+from isotopos.etl.sources.hotspot_enrichment import enrich_hotspots_from_datasets
 from isotopos.etl.spatial_builder import build_earth_h3_grid, build_planetary_grid
 from isotopos.scoring.engine import AnalogScoringEngine, PrepackedSiteIndex
 
@@ -28,14 +32,20 @@ class DataStore:
         root = Path(__file__).resolve().parents[3]
         processed = data_dir or (root / "data" / "processed")
 
+        self._earth_geojson_raw_bytes: bytes | None = None
         if (processed / "earth_h3_sites.json").exists():
             raw_sites = json.loads((processed / "earth_h3_sites.json").read_text(encoding="utf-8"))
             self.h3_sites = [EarthSite.model_construct(**s) for s in raw_sites]
-            self.earth_geojson = json.loads(
-                (processed / "earth_h3_grid.geojson").read_text(encoding="utf-8")
-            )
+            raw_geojson_bytes = (processed / "earth_h3_grid.geojson").read_bytes()
+            self._earth_geojson_raw_bytes = raw_geojson_bytes
+            self.earth_geojson = json.loads(raw_geojson_bytes)
             raw_hotspots = json.loads((processed / "earth_hotspots.json").read_text(encoding="utf-8"))
-            self.hotspots = [EarthSite(**h) for h in raw_hotspots]
+            loaded_hotspots = [EarthSite(**h) for h in raw_hotspots]
+            # Backfill country/photo metadata cleanly if processed hotspots predate enrichment.
+            if any(not h.country or not h.photo_url for h in loaded_hotspots):
+                self.hotspots = enrich_hotspots_from_datasets(loaded_hotspots)
+            else:
+                self.hotspots = loaded_hotspots
             raw_presets = json.loads(
                 (processed / "planetary_presets.json").read_text(encoding="utf-8")
             )
@@ -44,7 +54,7 @@ class DataStore:
             mars_grid = json.loads((processed / "mars_grid.json").read_text(encoding="utf-8"))
         else:
             self.h3_sites, self.earth_geojson = build_earth_h3_grid(max_cells=fallback_max_cells)
-            self.hotspots = list(EARTH_HOTSPOTS)
+            self.hotspots = enrich_hotspots_from_datasets(list(EARTH_HOTSPOTS))
             self.presets = list(PLANETARY_PRESETS)
             moon_grid = build_planetary_grid(PlanetaryBody.MOON, step_deg=fallback_step_deg)
             mars_grid = build_planetary_grid(PlanetaryBody.MARS, step_deg=fallback_step_deg)
@@ -59,6 +69,25 @@ class DataStore:
             mars_grid=mars_grid,
         )
         self.engine = AnalogScoringEngine(registry)
+        self._json_payload_cache: dict[str, tuple[bytes, bytes]] = {}
+
+    def get_cached_json_payload(
+        self,
+        key: str,
+        builder: Callable[[], Any],
+    ) -> tuple[bytes, bytes]:
+        """Serialize JSON once and cache both plain and gzip-compressed UTF-8 bytes."""
+        cached = self._json_payload_cache.get(key)
+        if cached is not None:
+            return cached
+        if key == "earth_grid" and self._earth_geojson_raw_bytes is not None:
+            raw_bytes = self._earth_geojson_raw_bytes
+        else:
+            raw_bytes = json.dumps(builder(), separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        gz_bytes = gzip.compress(raw_bytes, compresslevel=5)
+        entry = (raw_bytes, gz_bytes)
+        self._json_payload_cache[key] = entry
+        return entry
 
 
 @functools.lru_cache(maxsize=1)

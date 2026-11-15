@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>iso-topos — 3D Moon &amp; Mars Target Explorer</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles/planetary.css" />
+  <script src="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.js"></script>
+</head>
+<body>
+  <a href="#planetary-stage" class="skip-link">Skip to planetary globe</a>
+  <header class="topbar">
+    <div class="brand">
+      <a href="/" class="action-btn back-link-btn">← Back to Earth</a>
+      <span class="brand-mark">iso-topos</span>
+      <span class="brand-sub">3D Moon &amp; Mars Target Explorer</span>
+    </div>
+
+    <div class="topbar-controls">
+      <div class="segmented" role="group" aria-label="Planetary Body">
+        <button id="pl-btn-moon" type="button" class="seg-btn active" aria-pressed="true">Moon</button>
+        <button id="pl-btn-mars" type="button" class="seg-btn" aria-pressed="false">Mars</button>
+      </div>
+
+      <select id="pl-overlay-select" class="select-input compact" style="width: 220px;" title="Overlay NASA PDS / LRO / MGS gridded parameter"></select>
+
+      <select id="pl-palette-select" class="select-input compact" style="width: 145px;" title="Scientific overlay color palette">
+        <option value="bioluminescent">Bioluminescent</option>
+        <option value="viridis">Viridis</option>
+        <option value="magma">Magma</option>
+        <option value="plasma">Plasma</option>
+        <option value="turbo">Turbo</option>
+      </select>
+
+      <button id="pl-btn-spin" type="button" class="action-btn" aria-pressed="true">Auto-Spin: ON</button>
+      <button id="pl-btn-proj" type="button" class="action-btn" aria-pressed="true">3D Globe: ON</button>
+    </div>
+  </header>
+
+  <main class="planetary-workspace">
+    <section id="planetary-stage" class="planetary-stage" tabindex="-1" aria-label="Interactive Planetary Globe">
+      <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
+      <div id="planetary-map" role="region" aria-label="Interactive 3D Moon and Mars Globe"></div>
+
+      <div id="pl-cursor-pill" class="planetary-cursor-pill">
+        Click globe or mission pin to sample NASA/PDS grid — hover for live coordinates
+      </div>
+
+      <section id="pl-legend-card" class="map-overlay-card planetary-legend-card hidden">
+        <div class="overlay-body-stack">
+          <div class="slider-label-row">
+            <strong id="pl-legend-title" style="color: var(--text);">Elevation (m)</strong>
+            <span id="pl-legend-range">—</span>
+          </div>
+          <div id="pl-legend-bar" class="viridis-bar"></div>
+          <div class="legend-ticks">
+            <span id="pl-legend-min">0</span>
+            <span id="pl-legend-mid">50</span>
+            <span id="pl-legend-max">100</span>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <aside class="planetary-sidebar no-scrollbar">
+      <section class="planetary-card">
+        <div class="detail-summary-top">
+          <div>
+            <h2 id="pl-target-name" class="detail-site-title">Loading Target…</h2>
+            <p id="pl-target-coords" class="muted-note">—</p>
+          </div>
+          <span id="pl-target-badge" class="badge badge-neutral">Preset Exact</span>
+        </div>
+        <p id="pl-target-notes" class="detail-notes"></p>
+        <button id="pl-confirm-btn" type="button" class="confirm-target-btn">
+          Confirm Target &amp; Find Earth Analogs →
+        </button>
+      </section>
+
+      <section class="planetary-card">
+        <h3>Extract Arbitrary Coordinate</h3>
+        <div class="coord-inputs">
+          <label>Lat (°) <input type="number" id="pl-input-lat" step="0.1" min="-90" max="90" /></label>
+          <label>Lon (°E) <input type="number" id="pl-input-lon" step="0.1" min="-180" max="360" /></label>
+          <button id="pl-extract-btn" class="small-btn" type="button">Extract</button>
+        </div>
+      </section>
+
+      <section class="planetary-card">
+        <div class="section-header-row">
+          <h3 style="margin:0;">Mission Sites &amp; Landmarks</h3>
+          <span id="pl-mission-count" class="summary-pill pill-neutral">0</span>
+        </div>
+        <div id="pl-mission-list" class="mission-pin-list no-scrollbar"></div>
+      </section>
+
+      <section class="planetary-card">
+        <div class="section-header-row">
+          <h3 style="margin:0;">Extracted Target Parameters</h3>
+          <span id="pl-param-mode" class="summary-pill pill-accent">Exact</span>
+        </div>
+        <div class="table-scroll no-scrollbar" style="max-height: 290px;">
+          <table class="prov-table">
+            <thead>
+              <tr>
+                <th scope="col">Parameter</th>
+                <th scope="col">Value</th>
+                <th scope="col">Source / Notes</th>
+              </tr>
+            </thead>
+            <tbody id="pl-param-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <div id="a11y-announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="/static/js/planetary_page.js"></script>
+</body>
+</html>

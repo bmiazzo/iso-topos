@@ -101,6 +101,10 @@ class EarthSite(BaseModel):
     lon: float = Field(ge=-180.0, le=180.0)
     is_well_known: bool = False
     feature_category: str = "grid_cell"
+    country: str = ""
+    interpolated_parameters: list[str] = Field(default_factory=list)
+    photo_url: str | None = None
+    photo_attribution: str | None = None
     parameters: dict[str, float]
     notes: str = ""
 

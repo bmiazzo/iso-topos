@@ -209,3 +209,86 @@ def test_all_weights_zero_reported_even_when_all_sites_filtered_out():
     assert resp.filtered_site_count == 0
     assert resp.all_weights_zero is True
 
+
+def test_prepacked_and_single_site_do_not_trigger_gc_collect(monkeypatch):
+    """Regression test: PrepackedSiteIndex.from_sites and evaluate_single_site must never invoke gc.collect()."""
+    import gc
+    from isotopos.scoring.site_index import PrepackedSiteIndex
+
+    calls = 0
+
+    def fake_collect(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr(gc, "collect", fake_collect)
+    sites = [
+        _make_site("s1", overrides={"elevation_m": 1100.0}),
+        _make_site("s2", is_well_known=True, overrides={"elevation_m": 2000.0}),
+    ]
+    target = _make_target(overrides={"elevation_m": 1000.0})
+    engine = AnalogScoringEngine(DEFAULT_REGISTRY)
+
+    pre = PrepackedSiteIndex.from_sites(sites, DEFAULT_REGISTRY)
+    res = engine.evaluate_single_site(sites[0], target)
+    assert calls == 0
+    assert pre.get_parameter_map("elevation_m") == {"s1": 1100.0, "s2": 2000.0}
+    assert res.site.id == "s1"
+
+
+def test_evaluate_prepacked_edge_cases_topk_dimension_filter_and_novel_cache():
+    """Verify top_k=0, single dimension_id, unknown filter param, novel caching, and include_cell_scores=False."""
+    from isotopos.scoring.site_index import PrepackedSiteIndex
+
+    sites = [
+        _make_site("s1", overrides={"elevation_m": 1000.0, "mean_temp_c": -60.0}),
+        _make_site("s2", is_well_known=True, overrides={"elevation_m": 1200.0, "mean_temp_c": -50.0}),
+        _make_site("s3", overrides={"elevation_m": 2500.0, "mean_temp_c": -10.0}),
+    ]
+    target = _make_target(overrides={"elevation_m": 1000.0, "mean_temp_c": -60.0})
+    pre = PrepackedSiteIndex.from_sites(sites, DEFAULT_REGISTRY)
+    engine = AnalogScoringEngine(DEFAULT_REGISTRY)
+
+    # top_k=0 yields no ranked results while still evaluating candidates and cell_scores
+    zero_k = engine.evaluate_prepacked(prepacked=pre, target=target, top_k=0)
+    assert zero_k.ranked_results == []
+    assert set(zero_k.cell_scores.keys()) == {"s1", "s2", "s3"}
+
+    # dimension_id restricts cell_dimension_scores to that single dimension
+    dim_only = engine.evaluate_prepacked(
+        prepacked=pre,
+        target=target,
+        dimension_id="temperature_illumination",
+    )
+    assert set(dim_only.cell_dimension_scores["s1"].keys()) == {"temperature_illumination"}
+    assert set(dim_only.model_dump()["cell_scores"].keys()) == {"s1", "s2", "s3"}
+
+    # exclude_well_known filters consistently across repeated calls (cached novel slice)
+    novel_a = engine.evaluate_prepacked(prepacked=pre, target=target, exclude_well_known=True, top_k=5)
+    novel_b = engine.evaluate_prepacked(prepacked=pre, target=target, exclude_well_known=True, top_k=5)
+    assert [r.site.id for r in novel_a.ranked_results] == ["s1", "s3"]
+    assert [r.site.id for r in novel_b.ranked_results] == ["s1", "s3"]
+
+    # Unknown filter parameter_id returns empty filtered set cleanly
+    unknown_flt = engine.evaluate_prepacked(
+        prepacked=pre,
+        target=target,
+        filters=[PhysicalFilter(parameter_id="nonexistent_param", min_value=0.0)],
+    )
+    assert unknown_flt.filtered_site_count == 0
+    assert unknown_flt.ranked_results == []
+    assert unknown_flt.cell_scores == {}
+
+    # include_cell_scores=False returns ranked results without populating cell_scores
+    no_cells = engine.evaluate_prepacked(
+        prepacked=pre,
+        target=target,
+        top_k=1,
+        include_cell_scores=False,
+    )
+    assert len(no_cells.ranked_results) == 1
+    assert no_cells.ranked_results[0].site.id == "s1"
+    assert no_cells.cell_scores == {}
+
+

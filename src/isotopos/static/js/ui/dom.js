@@ -17,3 +17,24 @@ export function setButtonPressed(buttonEl, pressed) {
   buttonEl.classList.toggle("active", Boolean(pressed));
   buttonEl.setAttribute("aria-pressed", pressed ? "true" : "false");
 }
+
+export function setSpinButtonState(buttonEl, enabled) {
+  if (!buttonEl) return;
+  const active = Boolean(enabled);
+  buttonEl.textContent = active ? "Auto-Spin: ON" : "Auto-Spin: OFF";
+  buttonEl.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+export function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+}
+
+export function announcePolite(message) {
+  const el = document.getElementById("a11y-announcer");
+  if (!el) return;
+  el.textContent = "";
+  if (!message) return;
+  requestAnimationFrame(() => {
+    el.textContent = message;
+  });
+}

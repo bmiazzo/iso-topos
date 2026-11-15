@@ -3,10 +3,34 @@
 import { exportAnalogsBlob } from "../api.js";
 import { state } from "../state.js";
 import { createCollapsibleSection } from "../ui/collapsible.js";
-import { escapeHtml } from "../ui/dom.js";
+import { announcePolite, escapeHtml } from "../ui/dom.js";
 import { updateTargetBadge } from "./target_panel.js";
 
 const FILTER_INPUT_IDS = ["flt-max-slope", "flt-min-temp", "flt-max-temp", "flt-min-aridity"];
+const TEMP_ERROR_MSG = "Minimum temperature cannot exceed maximum temperature.";
+
+function setTemperatureValidation(minTempEl, maxTempEl, inverted) {
+  const wasInvalid = minTempEl?.getAttribute("aria-invalid") === "true";
+  for (const el of [minTempEl, maxTempEl]) {
+    if (!el) continue;
+    el.classList.toggle("input-invalid", inverted);
+    if (inverted) {
+      el.setAttribute("aria-invalid", "true");
+      el.setAttribute("aria-describedby", "filter-validation-error");
+    } else {
+      el.removeAttribute("aria-invalid");
+      el.removeAttribute("aria-describedby");
+    }
+  }
+  const errEl = document.getElementById("filter-validation-error");
+  if (errEl) {
+    errEl.textContent = inverted ? TEMP_ERROR_MSG : "";
+    errEl.classList.toggle("hidden", !inverted);
+  }
+  if (inverted && !wasInvalid) {
+    announcePolite(TEMP_ERROR_MSG);
+  }
+}
 
 export function buildActiveFilters() {
   const filters = [];
@@ -18,10 +42,9 @@ export function buildActiveFilters() {
   const minTemp = parseFloat(minTempEl?.value);
   const maxTemp = parseFloat(maxTempEl?.value);
   const invertedTemp = !Number.isNaN(minTemp) && !Number.isNaN(maxTemp) && minTemp > maxTemp;
-  minTempEl?.classList.toggle("input-invalid", invertedTemp);
-  maxTempEl?.classList.toggle("input-invalid", invertedTemp);
+  setTemperatureValidation(minTempEl, maxTempEl, invertedTemp);
 
-  if (!Number.isNaN(minTemp) || !Number.isNaN(maxTemp)) {
+  if (!invertedTemp && (!Number.isNaN(minTemp) || !Number.isNaN(maxTemp))) {
     filters.push({
       parameter_id: "mean_temp_c",
       min_value: Number.isNaN(minTemp) ? null : minTemp,
@@ -169,6 +192,11 @@ export function bindAdvancedEvents({ onRank, onScheduleRank, onSyncSummaries }) 
         el.classList.remove("input-invalid");
       }
     }
+    setTemperatureValidation(
+      document.getElementById("flt-min-temp"),
+      document.getElementById("flt-max-temp"),
+      false
+    );
     onSyncSummaries?.();
     onRank();
   });

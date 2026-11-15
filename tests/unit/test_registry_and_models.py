@@ -126,3 +126,33 @@ def test_target_location_tracks_extrapolation_flags():
     )
     assert target.is_extrapolated is True
     assert "mean_temp_c" in target.extrapolated_parameters
+
+
+def test_registry_validation_and_lookup_errors():
+    """Registry enforces unique dimension IDs, known dimension refs, valid ParameterSpec bounds, and raises KeyError on misses."""
+    first_dim = DEFAULT_REGISTRY.dimensions[0]
+    with pytest.raises(ValueError, match="Duplicate dimension"):
+        ParameterRegistry(dimensions=[first_dim, first_dim], parameters=[])
+
+    bad_param = DEFAULT_REGISTRY.parameters[0].model_copy(update={"dimension_id": "nonexistent_dim"})
+    with pytest.raises(ValueError, match="unknown dimension"):
+        ParameterRegistry(dimensions=DEFAULT_REGISTRY.dimensions, parameters=[bad_param])
+
+    with pytest.raises(ValueError, match="earth_max must exceed earth_min"):
+        ParameterSpec(
+            id="bad_bounds",
+            dimension_id="topography",
+            label="Bad Bounds",
+            unit="m",
+            earth_min=10.0,
+            earth_max=10.0,
+            default_weight=0.5,
+            earth_provenance=DEFAULT_REGISTRY.parameters[0].earth_provenance,
+            moon_provenance=DEFAULT_REGISTRY.parameters[0].moon_provenance,
+            mars_provenance=DEFAULT_REGISTRY.parameters[0].mars_provenance,
+        )
+
+    with pytest.raises(KeyError, match="Unknown dimension"):
+        DEFAULT_REGISTRY.get_dimension("missing_dim")
+    with pytest.raises(KeyError, match="Unknown parameter"):
+        DEFAULT_REGISTRY.get_parameter("missing_param")

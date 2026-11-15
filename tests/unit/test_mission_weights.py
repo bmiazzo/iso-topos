@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 import httpx
 import pytest
 
@@ -238,3 +239,55 @@ def test_gemini_and_openai_clients_with_mock_transport(monkeypatch: pytest.Monke
             registry=DEFAULT_REGISTRY,
             llm_client=err_client,
         )
+
+
+def test_llm_client_validation_errors_and_env_resolution(monkeypatch):
+    """Cover Gemini/OpenAI HTTP exceptions, malformed payloads, empty keys, and env selection."""
+    import httpx
+    from isotopos.scoring.llm_client import (
+        GeminiRESTClient,
+        LLMConfigurationError,
+        LLMProviderError,
+        OpenAICompatibleRESTClient,
+        resolve_llm_client,
+    )
+
+    with pytest.raises(LLMConfigurationError):
+        GeminiRESTClient(api_key="   ")
+
+    # Malformed Gemini payload -> LLMProviderError
+    malformed_gem = GeminiRESTClient(
+        api_key="k",
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"candidates": []})),
+    )
+    with pytest.raises(LLMProviderError):
+        malformed_gem.generate_weights_json("sys", "usr", {})
+
+    # Network error in Gemini -> LLMProviderError
+    def _raise_http(req):
+        raise httpx.ConnectError("offline", request=req)
+
+    offline_gem = GeminiRESTClient(api_key="k", transport=httpx.MockTransport(_raise_http))
+    with pytest.raises(LLMProviderError):
+        offline_gem.generate_weights_json("sys", "usr", {})
+
+    # OpenAI error paths (401, empty choices, ConnectError)
+    for handler in [
+        lambda req: httpx.Response(401, text="Unauthorized"),
+        lambda req: httpx.Response(200, json={"choices": []}),
+        _raise_http,
+    ]:
+        oa = OpenAICompatibleRESTClient(api_key="k", transport=httpx.MockTransport(handler))
+        with pytest.raises(LLMProviderError):
+            oa.generate_weights_json("sys", "usr", {})
+
+    # Environment variable resolution selects Gemini vs OpenAI cleanly
+    monkeypatch.setenv("GEMINI_API_KEY", "g-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    assert isinstance(resolve_llm_client(), GeminiRESTClient)
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "o-key")
+    assert isinstance(resolve_llm_client(), OpenAICompatibleRESTClient)
+

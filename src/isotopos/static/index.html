@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
   <title>iso-topos — Planetary-to-Earth Analog Discovery</title>
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.0.0/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/static/styles.css" />
@@ -10,10 +11,11 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
+  <a href="#main-stage" class="skip-link">Skip to interactive globe</a>
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark">iso-topos</span>
-      <span class="brand-sub">Planetary → Earth Analog Engine • H3 Res 4 (26 km)</span>
+      <span class="brand-sub">Planetary → Earth Analog Engine · H3 Res 4 (26 km)</span>
     </div>
 
     <div class="topbar-controls">
@@ -27,10 +29,13 @@
         <button id="btn-mode-advanced" type="button" class="seg-btn" data-mode="advanced" aria-pressed="false">Advanced Mode</button>
       </div>
 
-      <label class="toggle-pill" title="Hide or dim well-known baselines (Atacama, Antarctica, Hawaii, Iceland, Haughton, Rio Tinto)">
-        <input type="checkbox" id="chk-novel-only" />
-        <span>Beyond Well-Known Sites</span>
-      </label>
+      <div class="novel-toggle-wrap">
+        <label class="toggle-pill" title="Hide or dim well-known baselines (Atacama Chile, Antarctica <= -60°, Hawaii, Iceland, Haughton, Rio Tinto)">
+          <input type="checkbox" id="chk-novel-only" />
+          <span>Beyond Well-Known Sites</span>
+        </label>
+        <span id="novel-status-pill" class="summary-pill pill-neutral hidden">0 excluded</span>
+      </div>
 
       <button id="btn-toggle-spin" type="button" class="action-btn" aria-pressed="true" title="Gently spin the 3D globe when idle">Auto-Spin: ON</button>
       <button id="btn-toggle-projection" type="button" class="action-btn" aria-pressed="true">3D Globe: ON</button>
@@ -59,6 +64,9 @@
             <label class="field-label" for="preset-select">Curated Mission Preset</label>
             <select id="preset-select" class="select-input"></select>
             <p id="preset-context" class="muted-note"></p>
+            <a id="btn-open-planetary-explorer" href="/planetary" class="action-btn full-width-btn explorer-launch-btn">
+              Open 3D Moon / Mars Explorer →
+            </a>
 
             <!-- Level 2: Planetary Map Picker (Collapsed by default) -->
             <section class="collapsible-menu menu-level-2 is-collapsed" data-collapse-id="planetary-picker" data-collapse-default="closed">
@@ -174,6 +182,7 @@
                     <label>Max Temp (°C) <input type="number" id="flt-max-temp" placeholder="Any" step="5" /></label>
                     <label>Min Aridity (0-1) <input type="number" id="flt-min-aridity" placeholder="Any" step="0.1" min="0" max="1" /></label>
                   </div>
+                  <p id="filter-validation-error" class="field-error hidden"></p>
                   <div class="inline-actions-row">
                     <span class="muted-note" style="margin: 0;">Filters apply live across H3 &amp; hotspots</span>
                     <button id="btn-reset-filters" class="small-btn" type="button">Reset</button>
@@ -206,7 +215,7 @@
     </aside>
 
     <!-- Center 3D Earth Globe -->
-    <section class="map-stage">
+    <section id="main-stage" class="map-stage" tabindex="-1" aria-label="Interactive 3D Earth Globe">
       <canvas id="starfield-canvas" class="starfield-canvas" aria-hidden="true"></canvas>
       <div id="earth-map"></div>
 
@@ -223,7 +232,7 @@
               <span class="chevron">▾</span>
               <span class="collapse-title">Globe Layers</span>
             </span>
-            <span id="summary-layers" class="summary-pill pill-accent">Overall • Biolum</span>
+            <span id="summary-layers" class="summary-pill pill-accent">Overall · Biolum</span>
           </button>
           <div class="collapse-body">
             <div class="collapse-inner overlay-body-stack">
@@ -244,7 +253,9 @@
               <div class="overlay-row">
                 <label for="scale-mode-select">Color Scale Range:</label>
                 <select id="scale-mode-select" class="select-input compact">
-                  <option value="auto">Auto-Contrast (Data Min–Max)</option>
+                  <option value="auto">Auto-Contrast (p2–p98 Clip)</option>
+                  <option value="full">Full Data Min–Max</option>
+                  <option value="log">Logarithmic Stretch</option>
                   <option value="fixed">Absolute Fixed Scale (0–100%)</option>
                 </select>
               </div>
@@ -301,9 +312,11 @@
               <span id="legend-mid">50%</span>
               <span id="legend-max">100%</span>
             </div>
+            <div id="legend-bounds-note" class="legend-bounds-note hidden"></div>
             <div class="hotspot-legend">
-              <span><i class="dot dot-novel"></i> Novel Hotspot</span>
-              <span><i class="dot dot-baseline"></i> Well-Known Baseline</span>
+              <span><i class="dot dot-h3"></i> Top H3</span>
+              <span><i class="dot dot-novel"></i> Novel</span>
+              <span><i class="dot dot-baseline"></i> Baseline</span>
             </div>
           </div>
         </div>
@@ -331,8 +344,9 @@
         <div class="collapse-body">
           <div class="collapse-inner">
             <div class="segmented small-seg" role="group" aria-label="Ranked Analog Category">
-              <button id="tab-hotspots" class="seg-btn active" type="button" aria-pressed="true">Local Hotspots</button>
-              <button id="tab-h3" class="seg-btn" type="button" aria-pressed="false">Top H3 Regions</button>
+              <button id="tab-all" class="seg-btn active" type="button" aria-pressed="true">All Top Sites</button>
+              <button id="tab-h3" class="seg-btn" type="button" aria-pressed="false">H3 Regions</button>
+              <button id="tab-hotspots" class="seg-btn" type="button" aria-pressed="false">Named Sites</button>
             </div>
             <div id="ranked-list" class="ranked-list no-scrollbar"></div>
           </div>
@@ -354,6 +368,28 @@
               <div>
                 <h2 id="detail-name" class="detail-site-title">Site Name</h2>
                 <p id="detail-meta" class="muted-note"></p>
+              </div>
+            </div>
+            <div class="detail-badges-row">
+              <span id="detail-type-badge" class="badge badge-neutral">H3 Res 4</span>
+              <span id="detail-interp-badge" class="badge badge-neutral">Observed Grid</span>
+            </div>
+
+            <div class="detail-visual-grid">
+              <div class="visual-tile">
+                <div class="visual-frame">
+                  <img id="detail-photo-img" class="hidden" alt="Terrestrial analog field photograph" />
+                  <div id="detail-photo-fallback" class="visual-fallback">Site photo unavailable</div>
+                </div>
+                <div id="detail-photo-caption" class="visual-caption">Field Photograph</div>
+              </div>
+              <div class="visual-tile">
+                <div class="visual-frame">
+                  <img id="detail-sat-img" class="hidden" alt="Esri World Imagery orbital overhead view" />
+                  <div id="detail-sat-crosshair" class="sat-crosshair hidden"></div>
+                  <div id="detail-sat-fallback" class="visual-fallback">Overhead imagery unavailable</div>
+                </div>
+                <div id="detail-sat-caption" class="visual-caption">Satellite Overhead (z11)</div>
               </div>
             </div>
 
@@ -414,7 +450,7 @@
               <button type="button" class="collapse-trigger" aria-expanded="false">
                 <span class="collapse-title-wrap">
                   <span class="chevron">▾</span>
-                  <span class="collapse-title">Unit-Level Comparison &amp; Provenance (DR-3)</span>
+                  <span class="collapse-title">Data Sources &amp; Parameter Comparison</span>
                 </span>
                 <span id="summary-provenance" class="summary-pill pill-neutral">17 params</span>
               </button>
@@ -424,11 +460,11 @@
                     <table class="prov-table">
                       <thead>
                         <tr>
-                          <th>Parameter</th>
-                          <th>Earth</th>
-                          <th>Target</th>
-                          <th>Sim</th>
-                          <th>Sources</th>
+                          <th scope="col">Parameter</th>
+                          <th scope="col">Earth</th>
+                          <th scope="col">Target</th>
+                          <th scope="col">Similarity</th>
+                          <th scope="col">Sources</th>
                         </tr>
                       </thead>
                       <tbody id="detail-comparison-body"></tbody>
@@ -443,6 +479,7 @@
     </aside>
   </main>
 
+  <div id="a11y-announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

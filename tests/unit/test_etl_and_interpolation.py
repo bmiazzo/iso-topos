@@ -26,6 +26,20 @@ def test_grazing_sun_hours_increases_at_polar_latitudes():
     assert high_arctic > greenland
 
 
+def test_grazing_sun_hours_handles_moon_mars_and_earth_obliquities():
+    """compute_grazing_sun_hours computes valid bounded polar/equatorial hours across Earth, Moon, and Mars."""
+    earth_polar = compute_grazing_sun_hours(-78.0, obliquity_deg=23.44)
+    mars_polar = compute_grazing_sun_hours(-80.0, obliquity_deg=25.19)
+    mars_eq = compute_grazing_sun_hours(0.0, obliquity_deg=25.19)
+    moon_polar = compute_grazing_sun_hours(-89.0, obliquity_deg=1.54)
+    moon_eq = compute_grazing_sun_hours(0.0, obliquity_deg=1.54)
+
+    assert 0.0 <= earth_polar <= 2400.0
+    assert mars_polar > mars_eq > 0.0
+    assert moon_polar > moon_eq > 0.0
+    assert compute_grazing_sun_hours(-66.5, obliquity_deg=23.44) == compute_grazing_sun_hours(66.5, obliquity_deg=23.44)
+
+
 
 def test_catalogs_have_12_presets_and_26_hotspots_all_valid():
     """FR-2, FR-5, FR-6 & parameters.md: 12 Moon/Mars presets + 26 Baseline/Novel Earth hotspots."""
@@ -221,35 +235,37 @@ def test_planetary_parameter_synthesis_has_no_rectangular_discontinuities():
 
 
 def test_h3_grid_marks_well_known_baseline_vicinity():
-    """FR-6: H3 cells overlapping well-known baseline regions are flagged is_well_known=True."""
+    """FR-6: Baseline coordinates in Atacama, Antarctica, Iceland, Hawaii are flagged while Greenland stays novel."""
     import h3
-    from isotopos.api.datastore import get_default_datastore
-    from isotopos.etl.spatial_builder import _is_near_well_known_baseline
+    from isotopos.etl.spatial_builder import (
+        _is_near_well_known_baseline,
+        _synthesize_earth_cell_parameters,
+    )
 
-    by_id = get_default_datastore().h3_prepacked.site_by_id
-    atacama_cid = h3.latlng_to_cell(-24.08, -69.92, 4)
-    assert _is_near_well_known_baseline(-24.08, -69.92) is True
-    assert by_id[atacama_cid].is_well_known is True
+    for lat, lon in [(-24.08, -69.92), (-82.0, 20.0), (64.9, -18.0), (19.6, -155.5)]:
+        cid = h3.latlng_to_cell(lat, lon, 4)
+        c_lat, c_lon = h3.cell_to_latlng(cid)
+        assert _is_near_well_known_baseline(c_lat, c_lon) is True
+        assert _synthesize_earth_cell_parameters(c_lat, c_lon)["aridity_dryness_index"] >= 0.0
+
     # Greenland White Mountain is explicitly novel (is_well_known=False)
     greenland_cid = h3.latlng_to_cell(66.52, -52.45, 4)
-    assert _is_near_well_known_baseline(66.52, -52.45) is False
-    assert by_id[greenland_cid].is_well_known is False
+    g_lat, g_lon = h3.cell_to_latlng(greenland_cid)
+    assert _is_near_well_known_baseline(g_lat, g_lon) is False
 
 
-def test_planetary_and_earth_anchor_blending_is_order_independent_and_preserves_shackleton():
-    """Shackleton Rim (-89.9, 0.0) must not be overwritten by nearby Malapert Massif (-86.0, 0.0)."""
+def test_independent_planetary_and_earth_extraction_has_no_anchor_smearing():
+    """Planetary and Earth evaluation are independent at neighboring coordinates (no 4.5°/16° anchor blending)."""
     from isotopos.etl.spatial_builder import _synthesize_earth_cell_parameters, _synthesize_planetary_point
 
-    shackleton = next(p for p in PLANETARY_PRESETS if p.id == "shackleton_rim")
-    synth_shackleton = _synthesize_planetary_point(PlanetaryBody.MOON, shackleton.lat, shackleton.lon)
-    # Shackleton elevation is 1300m, slope is 24 deg (Malapert is 5000m, Mons Mouton is 6.5 deg)
-    assert abs(synth_shackleton["elevation_m"] - shackleton.parameters["elevation_m"]) < 350.0
-    assert abs(synth_shackleton["slope_deg"] - shackleton.parameters["slope_deg"]) < 3.0
+    # Etna hotspot has solar_illumination_frac=0.0 (cave); a neighbor 0.45° away keeps normal daylight
+    etna_neighbor = _synthesize_earth_cell_parameters(37.55, 14.55)
+    assert etna_neighbor["solar_illumination_frac"] > 0.35
 
-    # Earth hotspot H3 synthesis must also blend low_sun_grazing_hours
-    mcmurdo = next(h for h in EARTH_HOTSPOTS if h.id == "mcmurdo_dry_valleys")
-    synth_mcmurdo = _synthesize_earth_cell_parameters(mcmurdo.lat, mcmurdo.lon)
-    assert abs(synth_mcmurdo["low_sun_grazing_hours"] - mcmurdo.parameters["low_sun_grazing_hours"]) < 150.0
+    # Planetary extraction uses the gridded field without teleporting distant preset anomalies across 16°
+    moon_polar = _synthesize_planetary_point(PlanetaryBody.MOON, -89.5, 0.0)
+    moon_off_pole = _synthesize_planetary_point(PlanetaryBody.MOON, -75.0, 0.0)
+    assert moon_polar["low_sun_grazing_hours"] > moon_off_pole["low_sun_grazing_hours"]
 
 
 def test_load_land_h3_cells_returns_defensive_copy():
@@ -260,6 +276,51 @@ def test_load_land_h3_cells_returns_defensive_copy():
     cells_b = _load_land_h3_cells(res=4)
     assert len(cells_b) == initial_len
     assert "fake_cell_id" not in cells_b
+
+
+def test_h3_geometry_antimeridian_clipping_and_ring_closure():
+    """clip_antimeridian_halfplane splits antimeridian-spanning polygons without crossing the globe."""
+    from isotopos.etl.h3_geometry import clip_antimeridian_halfplane, close_rounded_ring, safe_hex_geometry
+    import h3
+
+    # Unwrapped 0..360 polygon crossing 180° (178 -> 182)
+    pts_360 = [(178.0, 10.0), (182.0, 10.0), (182.0, 12.0), (178.0, 12.0)]
+    east_180 = clip_antimeridian_halfplane(pts_360, keep_le_180=True)
+    west_360 = clip_antimeridian_halfplane(pts_360, keep_le_180=False)
+    assert len(east_180) >= 4 and len(west_360) >= 4
+    assert all(0.0 <= pt[0] <= 180.0 for pt in east_180)
+    assert all(180.0 <= pt[0] <= 360.0 for pt in west_360)
+
+    ring = close_rounded_ring([(1.234567, 2.345678), (3.0, 4.0), (5.0, 6.0)])
+    assert ring is not None and ring[0] == ring[-1]
+    assert close_rounded_ring([(1.0, 2.0)]) is None
+
+    cid = h3.latlng_to_cell(0.0, 179.99, 2)
+    geom = safe_hex_geometry(cid)
+    assert geom is not None
+    assert geom["type"] in ("Polygon", "MultiPolygon")
+
+
+def test_blend_with_anchors_is_symmetric_and_order_independent():
+    """blend_with_anchors produces identical values regardless of anchor list ordering."""
+    from isotopos.etl.geodesic_math import blend_with_anchors
+
+    base = {"elevation_m": 500.0, "slope_deg": 5.0}
+    anchors = [
+        (-85.0, 10.0, {"elevation_m": 2000.0, "slope_deg": 20.0}),
+        (-86.0, 15.0, {"elevation_m": 4000.0, "slope_deg": 10.0}),
+    ]
+    res_forward = blend_with_anchors(-85.4, 12.0, dict(base), anchors, max_dist_deg=8.0, sigma_deg=2.5)
+    res_reverse = blend_with_anchors(-85.4, 12.0, dict(base), list(reversed(anchors)), max_dist_deg=8.0, sigma_deg=2.5)
+    assert res_forward["elevation_m"] == pytest.approx(res_reverse["elevation_m"], abs=1e-12)
+    assert res_forward["slope_deg"] == pytest.approx(res_reverse["slope_deg"], abs=1e-12)
+
+    # Distant coordinates outside max_dist_deg stay unchanged; exact anchor locks closely
+    far = blend_with_anchors(10.0, 10.0, dict(base), anchors, max_dist_deg=4.0, sigma_deg=1.5)
+    assert far == base
+    at_first = blend_with_anchors(-85.0, 10.0, dict(base), anchors, max_dist_deg=8.0, sigma_deg=2.5)
+    assert at_first["elevation_m"] == pytest.approx(2000.0, abs=200.0)
+
 
 
 

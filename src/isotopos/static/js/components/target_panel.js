@@ -22,6 +22,18 @@ export function populatePresetDropdown() {
   sel.appendChild(customOpt);
 }
 
+export function updateExplorerLink() {
+  const link = document.getElementById("btn-open-planetary-explorer");
+  if (!link) return;
+  if (state.activePresetId) {
+    link.href = `/planetary?preset=${encodeURIComponent(state.activePresetId)}`;
+  } else if (state.target) {
+    link.href = `/planetary?body=${encodeURIComponent(state.body)}&lat=${state.target.lat.toFixed(2)}&lon=${state.target.lon.toFixed(2)}`;
+  } else {
+    link.href = `/planetary?body=${encodeURIComponent(state.body)}`;
+  }
+}
+
 export function updateTargetBadge() {
   const badge = document.getElementById("extrapolation-badge");
   if (!badge || !state.target) return;
@@ -45,6 +57,7 @@ export function syncControlsFromTarget({ onSyncSummaries } = {}) {
   if (lonInput) lonInput.value = state.target.lon.toFixed(2);
 
   updateTargetBadge();
+  updateExplorerLink();
 
   for (const p of state.metadata.parameters) {
     const valInput = document.getElementById(`val-${p.id}`);
@@ -71,6 +84,7 @@ export function bindTargetPanelEvents({ onSelectPreset, onExtractCoordinate }) {
     setButtonPressed(moonBtn, nextBody === "moon");
     setButtonPressed(marsBtn, nextBody === "mars");
     populatePresetDropdown();
+    updateExplorerLink();
     const first = state.metadata?.presets.find((p) => p.body === nextBody);
     if (first) await onSelectPreset(first.id);
   };

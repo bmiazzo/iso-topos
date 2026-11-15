@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Offline-fetched open datasets in data/raw/ (large rasters/archives excluded; small Natural Earth files tracked)
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/ne_50m_land.geojson
+!data/raw/ne_50m_h3_res4_cells.json
+!data/raw/ne_50m_admin_0_countries.geojson

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 import math
+from collections.abc import Callable
 
 from isotopos.core.models import PlanetaryBody
 from isotopos.etl.catalog_data import EARTH_HOTSPOTS, PLANETARY_PRESETS
 from isotopos.etl.geodesic_math import (
-    blend_with_anchors,
     compute_grazing_sun_hours,
     geodesic_deg,
     sigmoid,
@@ -106,8 +105,13 @@ _EARTH_ROUND_DIGITS: dict[str, int] = {
 }
 
 
-def is_near_well_known_baseline(lat: float, lon: float, radius_deg: float = 1.0) -> bool:
-    """Return True if (lat, lon) lies within radius_deg of any well-known baseline hotspot."""
+def is_near_well_known_baseline(lat: float, lon: float, radius_deg: float = 0.85) -> bool:
+    """Return True if (lat, lon) lies in a full well-known baseline region or near a baseline hotspot."""
+    from isotopos.etl.sources.baseline_regions import is_well_known_baseline_region
+
+    in_region, _ = is_well_known_baseline_region(lat, lon)
+    if in_region:
+        return True
     for hs in _WELL_KNOWN_HOTSPOTS:
         if abs(lat - hs.lat) > radius_deg:
             continue
@@ -169,9 +173,10 @@ def synthesize_earth_cell_parameters(lat: float, lon: float) -> dict[str, float]
     basalt = max(0.05, min(0.96, 0.18 + 0.74 * basalt_field + 0.14 * max(0.0, n2)))
     clay_carb = max(0.05, min(0.95, 0.16 + 0.62 * arid_field * (1.0 - 0.55 * polar_factor) + 0.08 * abs(n1)))
     regolith = max(0.15, min(0.99, 0.22 + 0.58 * aridity + 0.22 * polar_factor + 0.08 * highland_field))
-    magnetic_nt = 65.0 + 360.0 * abs(n3) + 180.0 * basalt_field + 120.0 * anorth_field
+    # Smooth cratonic/rift magnetic background without sinusoidal wave artifacts
+    magnetic_nt = 28.0 + 135.0 * basalt_field + 95.0 * anorth_field + 32.0 * abs(n1)
 
-    cave_score = max(0.15, min(0.96, 0.20 + 0.62 * basalt_field + 0.30 * permafrost + 0.06 * abs(n2)))
+    cave_score = max(0.15, min(0.92, 0.20 + 0.58 * basalt_field + 0.28 * permafrost))
     biosig = max(0.10, min(0.94, 0.18 + 0.58 * clay_carb * (0.4 + 0.6 * arid_field) * (1.0 - 0.65 * polar_factor)))
 
     base_params: dict[str, float] = {
@@ -193,18 +198,7 @@ def synthesize_earth_cell_parameters(lat: float, lon: float) -> dict[str, float]
         "subsurface_cave_drilling_score": cave_score,
         "biosignature_preservation_score": biosig,
     }
-
-    blended = blend_with_anchors(
-        lat=lat,
-        lon=lon,
-        base_params=base_params,
-        anchors=_EARTH_HOTSPOT_ANCHORS,
-        max_dist_deg=4.5,
-        sigma_deg=1.35,
-        max_blend=0.90,
-        eps_deg=0.30,
-    )
-    return {k: round(v, _EARTH_ROUND_DIGITS[k]) for k, v in blended.items()}
+    return {k: round(v, _EARTH_ROUND_DIGITS[k]) for k, v in base_params.items()}
 
 
 def _synthesize_moon_base(lat: float, lon_360: float, grazing: float) -> dict[str, float]:
@@ -301,15 +295,4 @@ def synthesize_planetary_point(body: PlanetaryBody, lat: float, lon: float) -> d
     obliquity = _PLANETARY_OBLIQUITY_DEG[body]
     grazing = compute_grazing_sun_hours(lat, obliquity_deg=obliquity)
     base_params = _PLANETARY_SYNTHESIZERS[body](lat, lon_360, grazing)
-
-    blended = blend_with_anchors(
-        lat=lat,
-        lon=lon_360,
-        base_params=base_params,
-        anchors=_PLANETARY_PRESET_ANCHORS[body],
-        max_dist_deg=16.0,
-        sigma_deg=4.5,
-        max_blend=0.92,
-        eps_deg=0.35,
-    )
-    return {k: round(v, 3) for k, v in blended.items()}
+    return {k: round(v, 3) for k, v in base_params.items()}

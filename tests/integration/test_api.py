@@ -208,6 +208,8 @@ def test_frontend_static_modules_and_collapsible_shell_served():
         "/static/js/components/advanced_panel.js",
         "/static/js/components/breakdown_panel.js",
         "/static/js/components/ai_weights.js",
+        "/static/js/planetary_page.js",
+        "/static/styles/planetary.css",
     ]
     for route in js_routes:
         assert client.get(route).status_code == 200, route
@@ -227,5 +229,166 @@ def test_health_and_error_handling_endpoints():
     preset = client.post("/api/v1/target/extract", json={"preset_id": "shackleton_rim"}).json()
     assert client.post("/api/v1/site/unknown_site", json={"target": preset}).status_code == 404
 
+
+def test_planetary_selector_page_served_with_html():
+    """GET /planetary serves the 3D Moon/Mars interactive coordinate selector HTML page."""
+    client = _client()
+    resp = client.get("/planetary")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Mars" in resp.text and "Moon" in resp.text
+
+
+def test_planetary_grid_parameter_endpoint_returns_grid_and_rejects_unknown():
+    """GET /api/v1/planetary-grid/{body}/parameter/{param_id} returns Moon/Mars parameter rasters and 404s unknown IDs."""
+    client = _client()
+    moon_resp = client.get("/api/v1/planetary-grid/moon/parameter/elevation_m")
+    assert moon_resp.status_code == 200
+    moon_data = moon_resp.json()
+    assert moon_data["body"] == "moon"
+    assert moon_data["parameter_id"] == "elevation_m"
+    assert len(moon_data["lats"]) > 5
+    assert len(moon_data["lons"]) > 5
+    assert len(moon_data["values"]) == len(moon_data["lats"])
+
+    mars_resp = client.get("/api/v1/planetary-grid/mars/parameter/subsurface_ice_permafrost")
+    assert mars_resp.status_code == 200
+    assert mars_resp.json()["body"] == "mars"
+
+    mars_mag = client.get("/api/v1/planetary-grid/mars/parameter/magnetic_anomaly_nt")
+    assert mars_mag.status_code == 200
+    assert len(mars_mag.json()["values"]) == len(mars_mag.json()["lats"])
+
+    assert client.get("/api/v1/planetary-grid/moon/parameter/nonexistent_param").status_code == 404
+
+
+def test_rank_dimension_filter_and_excluded_counts():
+    """POST /api/v1/rank with dimension_id returns per-cell dimension scores and well-known exclusion counts."""
+    client = _client()
+    preset = client.post("/api/v1/target/extract", json={"preset_id": "jezero_crater"}).json()
+    resp = client.post(
+        "/api/v1/rank",
+        json={
+            "target": preset,
+            "weights": preset["recommended_weights"],
+            "mode": "clamped",
+            "dimension_id": "geology",
+            "exclude_well_known": True,
+            "top_k": 5,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["cell_dimension_scores"]
+    assert set(data["cell_dimension_scores"].keys()) == set(data["cell_scores"].keys())
+    assert data["excluded_well_known_hotspot_count"] == 6
+    assert data["excluded_well_known_h3_count"] >= 0
+    for r in data["top_h3_results"]:
+        assert r["site"]["is_well_known"] is False
+        assert r["site"]["lat"] > -60.0
+
+
+def test_site_inspect_includes_country_provenance_and_photo_url():
+    """POST /api/v1/site/{id} exposes country, interpolated_parameters, and Wikimedia photo URLs on hotspots."""
+    client = _client()
+    preset = client.post("/api/v1/target/extract", json={"preset_id": "jezero_crater"}).json()
+    resp = client.post(
+        "/api/v1/site/salar_de_uyuni",
+        json={"target": preset, "weights": preset["recommended_weights"], "mode": "clamped"},
+    )
+    assert resp.status_code == 200
+    site = resp.json()["site"]
+    assert site["country"] == "Bolivia"
+    assert isinstance(site["interpolated_parameters"], list)
+    assert site["photo_url"] and site["photo_url"].startswith("https://")
+    assert site["photo_attribution"]
+
+
+def test_frontend_accessibility_and_scientific_chrome():
+    """Verify semantic dark color-scheme meta, skip links, table headers, and live regions via HTML parsing."""
+    from html.parser import HTMLParser
+
+    class _StructureInspector(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.ids: set[str] = set()
+            self.skip_hrefs: set[str] = set()
+            self.col_headers: list[str] = []
+            self.has_dark_meta = False
+            self._in_col_th = False
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            attr_map = dict(attrs)
+            el_id = attr_map.get("id")
+            if el_id:
+                self.ids.add(el_id)
+            if tag == "meta" and attr_map.get("name") == "color-scheme" and attr_map.get("content") == "dark":
+                self.has_dark_meta = True
+            if tag == "a" and "skip-link" in (attr_map.get("class") or ""):
+                href = attr_map.get("href")
+                if href:
+                    self.skip_hrefs.add(href)
+            if tag == "th" and attr_map.get("scope") == "col":
+                self._in_col_th = True
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag == "th":
+                self._in_col_th = False
+
+        def handle_data(self, data: str) -> None:
+            if self._in_col_th and data.strip():
+                self.col_headers.append(data.strip())
+
+    client = _client()
+    for path, expected_stage_id, expected_ids in [
+        ("/", "main-stage", {"filter-validation-error", "a11y-announcer"}),
+        ("/planetary", "planetary-stage", {"a11y-announcer"}),
+    ]:
+        inspector = _StructureInspector()
+        inspector.feed(client.get(path).text)
+        assert inspector.has_dark_meta is True
+        assert f"#{expected_stage_id}" in inspector.skip_hrefs
+        assert expected_stage_id in inspector.ids
+        assert expected_ids.issubset(inspector.ids)
+        assert "Parameter" in inspector.col_headers
+
+
+def test_weights_evaluate_error_status_mapping_and_earth_grid_encoding():
+    """Verify 503/502/422 error mapping on /weights/evaluate and gzip/identity caching on /earth-grid."""
+    from isotopos.api.datastore import get_default_datastore
+    from isotopos.scoring.llm_client import LLMConfigurationError, LLMProviderError
+
+    class _FailingLLM:
+        def __init__(self, exc: Exception) -> None:
+            self._exc = exc
+
+        def generate_weights_json(
+            self,
+            system_prompt: str,
+            user_prompt: str,
+            json_schema: dict,
+        ) -> dict:
+            raise self._exc
+
+    store = get_default_datastore()
+    for exc, expected_status in [
+        (LLMConfigurationError("missing api key"), 503),
+        (LLMProviderError("upstream timeout"), 502),
+        (ValueError("bad model output"), 422),
+    ]:
+        client = TestClient(create_app(store=store, llm_client=_FailingLLM(exc)))
+        resp = client.post(
+            "/api/v1/weights/evaluate",
+            json={"mission_description": "Lunar south pole ISRU mission"},
+        )
+        assert resp.status_code == expected_status
+
+    # Verify /earth-grid serves identical GeoJSON with both gzip and identity encodings
+    shared_client = TestClient(create_app(store=store))
+    r_gz = shared_client.get("/api/v1/earth-grid", headers={"Accept-Encoding": "gzip"})
+    r_raw = shared_client.get("/api/v1/earth-grid", headers={"Accept-Encoding": "identity"})
+    assert r_gz.status_code == 200
+    assert r_raw.status_code == 200
+    assert len(r_gz.json()["features"]) == len(r_raw.json()["features"])
 
 

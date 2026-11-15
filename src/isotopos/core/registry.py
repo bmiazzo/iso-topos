@@ -49,6 +49,11 @@ class ParameterRegistry:
         """Return registered parameters in declaration order."""
         return list(self._parameters)
 
+    @property
+    def parameter_ids(self) -> list[str]:
+        """Return ordered parameter ids."""
+        return [p.id for p in self._parameters]
+
     def get_dimension(self, dimension_id: str) -> DimensionSpec:
         """Look up a dimension by id."""
         if dimension_id not in self._dim_map:

@@ -1,11 +1,12 @@
-// 3D Earth Globe (MapLibre GL JS), basemap switching, hit-testing, and layer updates
+// 3D Earth Globe (MapLibre GL JS), basemap switching, ranked markers, hit-testing & layers
 
 import { fetchRawParameter } from "../api.js";
 import { PALETTES, state } from "../state.js";
-import { escapeHtml } from "../ui/dom.js";
+import { escapeHtml, prefersReducedMotion, setSpinButtonState } from "../ui/dom.js";
 import {
   buildFillColorExpression,
   buildFillOpacityExpression,
+  buildOutlineColorExpression,
   buildOutlineOpacityExpression,
   computeLayerColorRange,
   updateLegendGradient,
@@ -13,6 +14,47 @@ import {
 } from "./color_scale.js";
 
 export { updateLegendGradient };
+
+function shortPinTitle(name) {
+  if (!name) return "";
+  return name.length > 26 ? `${name.slice(0, 24)}…` : name;
+}
+
+let _cachedGeojsonRef = null;
+let _siteCoordsById = new Map();
+
+function getSiteCoordsById() {
+  if (_cachedGeojsonRef !== state.earthGeojson) {
+    _cachedGeojsonRef = state.earthGeojson;
+    _siteCoordsById = new Map();
+    for (const f of state.earthGeojson?.features || []) {
+      const id = f?.properties?.id;
+      const geom = f?.geometry;
+      if (!id || !geom?.coordinates) continue;
+      // Support both Polygon (coordinates[0]) and antimeridian MultiPolygon (coordinates[0][0])
+      const ring = geom.type === "MultiPolygon" ? geom.coordinates[0]?.[0] : geom.coordinates[0];
+      if (!ring?.length) continue;
+      let sx = 0;
+      let sy = 0;
+      for (const pt of ring) {
+        sx += pt[0];
+        sy += pt[1];
+      }
+      _siteCoordsById.set(id, [sx / ring.length, sy / ring.length]);
+    }
+  }
+  return _siteCoordsById;
+}
+
+function resolveSiteCoords(siteId, explicitCoords) {
+  if (explicitCoords && explicitCoords.length === 2) return explicitCoords;
+  const fromRank = [
+    ...(state.lastRankResponse?.top_h3_results || []),
+    ...(state.lastRankResponse?.hotspot_results || []),
+  ].find((r) => r.site.id === siteId);
+  if (fromRank) return [fromRank.site.lon, fromRank.site.lat];
+  return getSiteCoordsById().get(siteId) || null;
+}
 
 export function populateLayerSwitcher() {
   const sel = document.getElementById("layer-variable-select");
@@ -56,7 +98,7 @@ function positionTooltipWithinStage(tooltipEl, mapEl, point) {
   tooltipEl.style.top = `${top}px`;
 }
 
-export function highlightSelectedSiteOnMap(siteId) {
+export function highlightSelectedSiteOnMap(siteId, explicitCoords = null) {
   if (!state.map) return;
   const targetId = siteId || "";
   if (state.map.getLayer("earth-h3-selected")) {
@@ -65,11 +107,37 @@ export function highlightSelectedSiteOnMap(siteId) {
   if (state.map.getLayer("earth-hotspots-selected")) {
     state.map.setFilter("earth-hotspots-selected", ["==", ["get", "id"], targetId]);
   }
+  const beaconSrc = state.map.getSource("earth-selected-beacon");
+  if (beaconSrc) {
+    const coords = targetId ? resolveSiteCoords(targetId, explicitCoords) : null;
+    beaconSrc.setData({
+      type: "FeatureCollection",
+      features: coords
+        ? [{ type: "Feature", properties: { id: targetId }, geometry: { type: "Point", coordinates: coords } }]
+        : [],
+    });
+  }
+}
+
+export function flyToSiteOnGlobe(lon, lat, zoom = 3.4, pauseSpin = true) {
+  if (!state.map) return;
+  if (pauseSpin && state.autoSpin) {
+    state.autoSpin = false;
+    setSpinButtonState(document.getElementById("btn-toggle-spin"), false);
+  }
+  state.userInteracting = true;
+  clearTimeout(state.flyToTimer);
+  const reduce = prefersReducedMotion();
+  state.map.flyTo({ center: [lon, lat], zoom, ...(reduce ? { duration: 0 } : { speed: 1.15 }) });
+  state.flyToTimer = setTimeout(() => {
+    if (!state.pointerDown) state.userInteracting = false;
+  }, reduce ? 100 : 2400);
 }
 
 export function initEarthMap({ onInspectSite }) {
   const style = {
     version: 8,
+    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     projection: { type: "globe" },
     sky: {
       "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 0.88, 5, 0.38, 7, 0.0],
@@ -122,6 +190,7 @@ export function initEarthMap({ onInspectSite }) {
   const resumePointer = () => {
     state.pointerDown = false;
     state.userInteracting = false;
+    requestAutoSpinFrame();
   };
   map.on("mousedown", pausePointer);
   map.on("touchstart", pausePointer);
@@ -129,14 +198,19 @@ export function initEarthMap({ onInspectSite }) {
     state.userInteracting = true;
     clearTimeout(map._wheelTimeout);
     map._wheelTimeout = setTimeout(() => {
-      if (!state.pointerDown) state.userInteracting = false;
+      if (!state.pointerDown) {
+        state.userInteracting = false;
+        requestAutoSpinFrame();
+      }
     }, 2200);
   });
   map.on("mouseup", resumePointer);
   map.on("touchend", resumePointer);
+  map.on("zoomend", requestAutoSpinFrame);
 
   map.on("style.load", () => {
     map.setProjection({ type: state.isGlobe ? "globe" : "mercator" });
+    requestAutoSpinFrame();
   });
 
   map.on("load", () => {
@@ -175,11 +249,63 @@ export function initEarthMap({ onInspectSite }) {
       filter: ["==", ["get", "id"], ""],
       paint: {
         "line-color": "#38bdf8",
-        "line-width": 2.6,
+        "line-width": 2.8,
         "line-opacity": 0.98,
       },
     });
 
+    // Top-K H3 Region Markers + Labels
+    map.addSource("earth-top-h3", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+
+    map.addLayer({
+      id: "earth-top-h3-halo",
+      type: "circle",
+      source: "earth-top-h3",
+      paint: {
+        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 10, 0.95, 19],
+        "circle-color": "#2dd4bf",
+        "circle-opacity": 0.26,
+        "circle-blur": 0.6,
+      },
+    });
+
+    map.addLayer({
+      id: "earth-top-h3-pin",
+      type: "circle",
+      source: "earth-top-h3",
+      paint: {
+        "circle-radius": ["case", ["get", "is_top3"], 8.0, 6.0],
+        "circle-color": ["case", ["get", "is_top3"], "#2dd4bf", "#0d9488"],
+        "circle-stroke-width": 2.0,
+        "circle-stroke-color": "#ffffff",
+      },
+    });
+
+    map.addLayer({
+      id: "earth-top-h3-label",
+      type: "symbol",
+      source: "earth-top-h3",
+      layout: {
+        "text-font": ["Open Sans Regular"],
+        "text-field": ["get", "label"],
+        "text-size": 11,
+        "text-offset": [0, -1.35],
+        "text-anchor": "bottom",
+        "text-allow-overlap": false,
+        "text-padding": 4,
+        "symbol-sort-key": ["get", "rank"],
+      },
+      paint: {
+        "text-color": "#ecfeff",
+        "text-halo-color": "#040812",
+        "text-halo-width": 1.8,
+      },
+    });
+
+    // Named Analog Hotspots (Score-scaled + Labels)
     map.addSource("earth-hotspots", {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
@@ -190,7 +316,7 @@ export function initEarthMap({ onInspectSite }) {
       type: "circle",
       source: "earth-hotspots",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 10, 5.0, 15],
+        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 9, 0.95, 17],
         "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
         "circle-opacity": 0.28,
         "circle-blur": 0.65,
@@ -202,10 +328,31 @@ export function initEarthMap({ onInspectSite }) {
       type: "circle",
       source: "earth-hotspots",
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 5.5, 5.0, 8.0],
+        "circle-radius": ["interpolate", ["linear"], ["get", "score"], 0.2, 4.8, 0.95, 8.6],
         "circle-color": ["case", ["get", "is_well_known"], "#f59e0b", "#38bdf8"],
-        "circle-stroke-width": 1.6,
+        "circle-stroke-width": 1.7,
         "circle-stroke-color": "#ffffff",
+      },
+    });
+
+    map.addLayer({
+      id: "earth-hotspots-label",
+      type: "symbol",
+      source: "earth-hotspots",
+      layout: {
+        "text-font": ["Open Sans Regular"],
+        "text-field": ["get", "label"],
+        "text-size": 10.5,
+        "text-offset": [0, 1.25],
+        "text-anchor": "top",
+        "text-allow-overlap": false,
+        "text-padding": 4,
+        "symbol-sort-key": ["+", 25, ["get", "rank"]],
+      },
+      paint: {
+        "text-color": ["case", ["get", "is_well_known"], "#fde68a", "#bae6fd"],
+        "text-halo-color": "#040812",
+        "text-halo-width": 1.7,
       },
     });
 
@@ -215,20 +362,37 @@ export function initEarthMap({ onInspectSite }) {
       source: "earth-hotspots",
       filter: ["==", ["get", "id"], ""],
       paint: {
-        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 9.0, 5.0, 12.5],
+        "circle-radius": ["interpolate", ["linear"], ["zoom"], 1.5, 11.0, 5.0, 15.0],
         "circle-color": "rgba(56, 189, 248, 0.0)",
-        "circle-stroke-width": 2.4,
+        "circle-stroke-width": 2.6,
         "circle-stroke-color": "#2dd4bf",
+      },
+    });
+
+    // High-contrast beacon ring around whichever site (H3 or Hotspot) is selected
+    map.addSource("earth-selected-beacon", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: [] },
+    });
+
+    map.addLayer({
+      id: "earth-selected-beacon-outer",
+      type: "circle",
+      source: "earth-selected-beacon",
+      paint: {
+        "circle-radius": 17,
+        "circle-color": "rgba(45, 212, 191, 0.08)",
+        "circle-stroke-width": 2.4,
+        "circle-stroke-color": "#fde047",
       },
     });
 
     const tooltip = document.getElementById("hover-tooltip");
     const mapContainer = map.getContainer();
+    const interactiveLayers = ["earth-hotspots-circle", "earth-top-h3-pin", "earth-h3-fill"];
 
     map.on("mousemove", (e) => {
-      const hits = map.queryRenderedFeatures(e.point, {
-        layers: ["earth-hotspots-circle", "earth-h3-fill"],
-      });
+      const hits = map.queryRenderedFeatures(e.point, { layers: interactiveLayers });
       if (!hits.length) {
         map.getCanvas().style.cursor = "";
         tooltip.classList.add("hidden");
@@ -238,11 +402,23 @@ export function initEarthMap({ onInspectSite }) {
       const top = hits[0];
       if (top.layer.id === "earth-hotspots-circle") {
         const p = top.properties;
-        const kind = p.is_well_known ? "Baseline Hotspot" : "Novel Hotspot";
+        const kind = p.is_well_known ? "Well-Known Baseline" : "Novel Hotspot";
         map.getCanvas().style.cursor = "pointer";
         tooltip.innerHTML =
           `<strong>${escapeHtml(p.name)}</strong><br/>` +
-          `${escapeHtml(kind)}<br/>` +
+          `${escapeHtml(p.country || kind)}<br/>` +
+          `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
+        tooltip.classList.remove("hidden");
+        positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        return;
+      }
+
+      if (top.layer.id === "earth-top-h3-pin") {
+        const p = top.properties;
+        map.getCanvas().style.cursor = "pointer";
+        tooltip.innerHTML =
+          `<strong>#${escapeHtml(p.rank)} ${escapeHtml(p.name)}</strong><br/>` +
+          `${escapeHtml(p.country)} · Top H3 Region<br/>` +
           `Similarity: <b>${escapeHtml(p.score_pct)}%</b>`;
         tooltip.classList.remove("hidden");
         positionTooltipWithinStage(tooltip, mapContainer, e.point);
@@ -253,6 +429,17 @@ export function initEarthMap({ onInspectSite }) {
       const val = state.cellDisplayValues[props.id] ?? top.state?.display_val ?? -999999;
       const isRaw = state.activeLayer.startsWith("raw:");
       const cutoff = isRaw ? -99999 : state.minScoreFilter;
+
+      if (!isRaw && state.excludeWellKnown && props.is_well_known) {
+        map.getCanvas().style.cursor = "";
+        tooltip.innerHTML =
+          `<strong>${escapeHtml(props.country || props.name)}</strong><br/>` +
+          `Excluded Baseline Region`;
+        tooltip.classList.remove("hidden");
+        positionTooltipWithinStage(tooltip, mapContainer, e.point);
+        return;
+      }
+
       if (val <= -99999 || val < cutoff) {
         map.getCanvas().style.cursor = "";
         tooltip.classList.add("hidden");
@@ -265,9 +452,12 @@ export function initEarthMap({ onInspectSite }) {
         const param = state.metadata.parameters.find((pm) => pm.id === state.activeLayer.slice(4));
         unitLabel = param ? ` ${param.unit}` : "";
       }
+      const place = props.country && props.country !== props.region
+        ? `${props.country} (${props.region})`
+        : props.region;
       tooltip.innerHTML =
         `<strong>${escapeHtml(props.name)}</strong><br/>` +
-        `${escapeHtml(props.region)}<br/>` +
+        `${escapeHtml(place)}<br/>` +
         `Value: <b>${escapeHtml(Number(val).toFixed(1))}${escapeHtml(unitLabel)}</b>`;
       tooltip.classList.remove("hidden");
       positionTooltipWithinStage(tooltip, mapContainer, e.point);
@@ -279,12 +469,10 @@ export function initEarthMap({ onInspectSite }) {
     });
 
     map.on("click", (e) => {
-      const hits = map.queryRenderedFeatures(e.point, {
-        layers: ["earth-hotspots-circle", "earth-h3-fill"],
-      });
+      const hits = map.queryRenderedFeatures(e.point, { layers: interactiveLayers });
       if (!hits.length) return;
       const top = hits[0];
-      if (top.layer.id === "earth-hotspots-circle") {
+      if (top.layer.id === "earth-hotspots-circle" || top.layer.id === "earth-top-h3-pin") {
         onInspectSite(top.properties.id);
         return;
       }
@@ -319,26 +507,48 @@ export function applyBasemap(basemapId) {
   state.map.setLayoutProperty("gibs_modis", "visibility", useModis ? "visible" : "none");
 }
 
-export function startAutoSpinLoop() {
-  let lastTime = performance.now();
-  function frame(now) {
-    const dt = (now - lastTime) / 1000.0;
-    lastTime = now;
-    if (
+let _spinRafId = 0;
+let _spinLastTime = 0;
+let _spinListenersBound = false;
+
+function shouldSpinEarth() {
+  return Boolean(
+    !document.hidden &&
       state.map &&
       state.isGlobe &&
       state.autoSpin &&
       !state.userInteracting &&
       !state.pointerDown &&
       state.map.getZoom() < 2.8
-    ) {
-      const center = state.map.getCenter();
-      center.lng = ((center.lng + dt * 2.4 + 180) % 360) - 180;
-      state.map.setCenter(center);
-    }
-    requestAnimationFrame(frame);
+  );
+}
+
+function spinStep(now) {
+  _spinRafId = 0;
+  if (!shouldSpinEarth()) return;
+  const dt = Math.min(0.1, (now - _spinLastTime) / 1000.0);
+  _spinLastTime = now;
+  const center = state.map.getCenter();
+  center.lng = ((center.lng + dt * 2.4 + 180) % 360) - 180;
+  state.map.setCenter(center);
+  _spinRafId = requestAnimationFrame(spinStep);
+}
+
+export function requestAutoSpinFrame() {
+  if (!_spinRafId && shouldSpinEarth()) {
+    _spinLastTime = performance.now();
+    _spinRafId = requestAnimationFrame(spinStep);
   }
-  requestAnimationFrame(frame);
+}
+
+export function startAutoSpinLoop() {
+  if (!_spinListenersBound && typeof document !== "undefined") {
+    _spinListenersBound = true;
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) requestAutoSpinFrame();
+    });
+  }
+  requestAutoSpinFrame();
 }
 
 async function ensureRawParameterLoaded(paramId) {
@@ -353,7 +563,7 @@ export async function updateEarthMapLayers(updateData = true) {
   }
 
   const seq = ++state.renderSeq;
-  const { cell_scores, cell_dimension_scores, hotspot_results } = state.lastRankResponse;
+  const { cell_scores, cell_dimension_scores, hotspot_results, top_h3_results } = state.lastRankResponse;
   const layerKey = state.activeLayer;
 
   let legendTitle = "Overall Similarity (%)";
@@ -387,14 +597,14 @@ export async function updateEarthMapLayers(updateData = true) {
     for (const feat of state.earthGeojson.features) {
       const id = feat.properties.id;
       let val = -999999;
-      if (id in cell_scores) {
+      if (rawMap) {
+        val = rawMap[id] ?? -999999;
+      } else if (id in cell_scores) {
         if (layerKey === "overall_score") {
           val = cell_scores[id] * 100.0;
         } else if (dimId) {
           const sub = cell_dimension_scores[id]?.[dimId];
           val = sub === null || sub === undefined ? -999999 : sub * 100.0;
-        } else if (rawMap) {
-          val = rawMap[id] ?? -999999;
         }
       }
       state.cellDisplayValues[id] = val;
@@ -403,7 +613,7 @@ export async function updateEarthMapLayers(updateData = true) {
   }
 
   const effectiveCutoff = isScoreLayer ? state.minScoreFilter : -99999;
-  const { minVal, maxVal, validCount } = computeLayerColorRange({
+  const { minVal, midVal, maxVal, rawMin, rawMax, isClipped, validCount } = computeLayerColorRange({
     features: state.earthGeojson.features,
     cellDisplayValues: state.cellDisplayValues,
     isScoreLayer,
@@ -416,10 +626,21 @@ export async function updateEarthMapLayers(updateData = true) {
     legendTitle = `${legendTitle} — N/A (0% weights)`;
   }
 
-  updateLegendLabels({ legendTitle, minVal, maxVal, isScoreLayer });
+  updateLegendLabels({
+    legendTitle,
+    minVal,
+    midVal,
+    maxVal,
+    rawMin,
+    rawMax,
+    isClipped,
+    isScoreLayer,
+    scaleMode: state.scaleMode,
+  });
 
   const paletteStops = PALETTES[state.palette] || PALETTES.bioluminescent;
   const valExpr = ["coalesce", ["feature-state", "display_val"], -999999];
+  const dimWellKnown = isScoreLayer && state.excludeWellKnown;
 
   const colorExpr = buildFillColorExpression({
     valExpr,
@@ -427,6 +648,8 @@ export async function updateEarthMapLayers(updateData = true) {
     paletteStops,
     minVal,
     maxVal,
+    scaleMode: state.scaleMode,
+    dimWellKnown,
   });
   const opacityExpr = buildFillOpacityExpression({
     valExpr,
@@ -435,30 +658,76 @@ export async function updateEarthMapLayers(updateData = true) {
     hexOpacity: state.hexOpacity,
     minVal,
     maxVal,
+    dimWellKnown,
   });
   const outlineOpacityExpr = buildOutlineOpacityExpression({
+    isScoreLayer,
+  });
+  const outlineColorExpr = buildOutlineColorExpression({
     valExpr,
+    isScoreLayer,
     effectiveCutoff,
   });
 
   state.map.setPaintProperty("earth-h3-fill", "fill-color", colorExpr);
   state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);
+  state.map.setPaintProperty("earth-h3-outline", "line-color", outlineColorExpr);
   state.map.setPaintProperty("earth-h3-outline", "line-opacity", outlineOpacityExpr);
 
-  const hsFeatures = state.showHotspots
-    ? hotspot_results.map((r) => ({
+  const minPinScore = isScoreLayer ? state.minScoreFilter : 0;
+
+  // Update Top-K H3 region pins
+  const h3Features = (top_h3_results || [])
+    .filter((r) => r.overall_score * 100 >= minPinScore)
+    .map((r) => {
+      const scorePct = Math.round(r.overall_score * 100);
+      return {
         type: "Feature",
         properties: {
           id: r.site.id,
           name: r.site.name,
-          is_well_known: r.site.is_well_known,
-          score_pct: Math.round(r.overall_score * 100),
+          country: r.site.country || r.site.region,
+          rank: r.rank,
+          score: r.overall_score,
+          score_pct: scorePct,
+          is_top3: r.rank <= 3,
+          label: `#${r.rank} ${shortPinTitle(r.site.name)} (${scorePct}%)`,
         },
         geometry: {
           type: "Point",
           coordinates: [r.site.lon, r.site.lat],
         },
-      }))
+      };
+    });
+  state.map.getSource("earth-top-h3")?.setData({
+    type: "FeatureCollection",
+    features: h3Features,
+  });
+
+  // Update Named Hotspot markers (respecting Min Score Spotlight & toggle)
+  const hsFeatures = state.showHotspots
+    ? (hotspot_results || [])
+        .filter((r) => r.overall_score * 100 >= minPinScore)
+        .map((r, idx) => {
+          const scorePct = Math.round(r.overall_score * 100);
+          return {
+            type: "Feature",
+            properties: {
+              id: r.site.id,
+              name: r.site.name,
+              country: r.site.country || r.site.region,
+              rank: idx + 1,
+              is_well_known: r.site.is_well_known,
+              score: r.overall_score,
+              score_pct: scorePct,
+              label: `${shortPinTitle(r.site.name)} (${scorePct}%)`,
+            },
+            geometry: {
+              type: "Point",
+              coordinates: [r.site.lon, r.site.lat],
+            },
+          };
+        })
     : [];
 
   state.map.getSource("earth-hotspots")?.setData({

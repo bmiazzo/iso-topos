@@ -156,7 +156,7 @@
   display: grid;
   grid-template-rows: 1fr;
   opacity: 1;
-  transition: grid-template-rows 190ms var(--collapse-ease), opacity 160ms ease, margin-top 180ms ease;
+  transition: grid-template-rows 190ms var(--collapse-ease), opacity 160ms ease;
   margin-top: 8px;
 }
 

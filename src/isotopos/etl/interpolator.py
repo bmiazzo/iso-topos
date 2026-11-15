@@ -79,3 +79,19 @@ class PlanetaryGridInterpolator:
             extrapolated_parameters=param_ids,
             notes=f"Bilinearly interpolated from {step:.1f}° {body.value.title()} global spatial grid (FR-3).",
         )
+
+    def get_grid_parameter_slice(self, body: PlanetaryBody, param_id: str) -> dict[str, Any]:
+        """Return lightweight 2D grid matrix for a single planetary parameter (for /planetary overlay)."""
+        grid = self._grids[body]
+        values: list[list[float]] = [
+            [round(float(cell.get(param_id, 0.0)), 4) for cell in row]
+            for row in grid["values"]
+        ]
+        return {
+            "body": body.value,
+            "parameter_id": param_id,
+            "step_deg": float(grid["step_deg"]),
+            "lats": grid["lats"],
+            "lons": grid["lons"],
+            "values": values,
+        }

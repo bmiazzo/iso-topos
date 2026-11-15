@@ -1,12 +1,13 @@
 .topbar {
-  height: 52px;
+  min-height: 52px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  gap: 12px;
+  padding: 6px 16px;
+  gap: 10px 14px;
+  flex-wrap: wrap;
 }
 
 .brand {
@@ -187,4 +188,41 @@
   top: 12px;
   right: 54px; /* Clears MapLibre NavigationControl in top-right */
   z-index: 6;
+}
+
+@media (max-width: 1120px) {
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(54dvh, 62dvh) auto;
+    height: auto;
+    min-height: calc(100dvh - 52px);
+    overflow-y: auto;
+  }
+
+  .panel {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: none;
+  }
+
+  .right-panel {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .map-stage {
+    min-height: 54dvh;
+  }
+
+  .sidebar-collapse-btn,
+  .floating-expand-pill {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace,
+  .panel {
+    transition: none;
+  }
 }

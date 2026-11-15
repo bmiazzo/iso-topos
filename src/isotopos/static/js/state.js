@@ -57,7 +57,7 @@ export const state = {
   userInteracting: false,
   pointerDown: false,
   flyToTimer: null,
-  activeTab: "hotspots",
+  activeTab: "all",
   activeLayer: "overall_score",
   palette: "bioluminescent",
   scaleMode: "auto",

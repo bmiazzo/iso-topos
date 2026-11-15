@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 from isotopos.core.models import EarthSite, PhysicalFilter
@@ -9,7 +11,7 @@ from isotopos.core.registry import ParameterRegistry
 
 
 class PrepackedSiteIndex:
-    """Pre-packed contiguous NumPy matrix for instantaneous evaluation of ~85,000+ H3 cells."""
+    """Pre-packed contiguous NumPy matrix for fast evaluation of ~85,000+ H3 cells."""
 
     def __init__(
         self,
@@ -25,6 +27,10 @@ class PrepackedSiteIndex:
         self.earth_mat = earth_mat
         self.well_known_mask = well_known_mask
         self.param_col_index = param_col_index
+        self._param_map_cache: dict[str, dict[str, float]] = {}
+        self._full_dict_template: dict[str, float] | None = None
+        self._novel_dict_template: dict[str, float] | None = None
+        self._novel_slice_cache: tuple[np.ndarray, np.ndarray, list[str]] | None = None
 
     @classmethod
     def from_sites(cls, sites: list[EarthSite], registry: ParameterRegistry) -> PrepackedSiteIndex:
@@ -53,11 +59,46 @@ class PrepackedSiteIndex:
             param_col_index=param_col_index,
         )
 
+    def get_full_dict_template(self) -> dict[str, float] | None:
+        """Lazily build and cache a pre-sized dict template for large indices."""
+        if len(self.site_ids) < 2048:
+            return None
+        if self._full_dict_template is None:
+            self._full_dict_template = dict.fromkeys(self.site_ids, 0.0)
+        return self._full_dict_template
+
+    def get_novel_slice(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, Sequence[str], dict[str, float] | None]:
+        """Lazily cache contiguous arrays/IDs for well-known-excluded evaluation."""
+        if self._novel_slice_cache is None:
+            novel_indices = np.flatnonzero(~self.well_known_mask)
+            novel_mat = np.ascontiguousarray(self.earth_mat[novel_indices])
+            site_ids = self.site_ids
+            novel_ids = [site_ids[i] for i in novel_indices.tolist()]
+            self._novel_slice_cache = (novel_indices, novel_mat, novel_ids)
+        indices, mat, ids = self._novel_slice_cache
+        return indices, mat, ids, None
+
+    def get_novel_dict_template(self) -> dict[str, float] | None:
+        """Lazily build and cache a pre-sized dict template for well-known-excluded indices."""
+        _, _, novel_ids, _ = self.get_novel_slice()
+        if len(novel_ids) < 2048:
+            return None
+        if self._novel_dict_template is None:
+            self._novel_dict_template = dict.fromkeys(novel_ids, 0.0)
+        return self._novel_dict_template
+
     def get_parameter_map(self, parameter_id: str) -> dict[str, float]:
-        """Return {site_id: rounded_value} mapping for a single registered parameter."""
+        """Return cached {site_id: rounded_value} mapping for a single registered parameter."""
+        cached = self._param_map_cache.get(parameter_id)
+        if cached is not None:
+            return cached
         col = self.param_col_index[parameter_id]
         vals = np.round(self.earth_mat[:, col], 4).tolist()
-        return dict(zip(self.site_ids, vals))
+        result = dict(zip(self.site_ids, vals))
+        self._param_map_cache[parameter_id] = result
+        return result
 
     def filter_indices(
         self,

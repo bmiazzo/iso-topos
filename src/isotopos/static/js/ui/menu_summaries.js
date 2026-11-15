@@ -33,7 +33,7 @@ export function updateAllMenuSummaries(collapseCtrl, activeFilterCount = 0) {
       ? "Override"
       : "Exact";
     const isWarn = state.target.is_extrapolated || state.targetCustomized;
-    collapseCtrl.setSummary("summary-picker", `${coord} • ${tag}`, isWarn ? "warn" : "neutral");
+    collapseCtrl.setSummary("summary-picker", `${coord} · ${tag}`, isWarn ? "warn" : "neutral");
   }
 
   // AI Evaluator
@@ -77,7 +77,7 @@ export function updateAllMenuSummaries(collapseCtrl, activeFilterCount = 0) {
     const avgPct = dimActive > 0 ? Math.round((dimWeightSum / dimActive) * 100) : 0;
     collapseCtrl.setSummary(
       `summary-dim-${dim.id}`,
-      `${dimActive}/${dimParams.length} • ${avgPct}%`,
+      `${dimActive}/${dimParams.length} · ${avgPct}%`,
       dimActive === 0 ? "neutral" : "ok"
     );
   }
@@ -99,5 +99,5 @@ export function updateAllMenuSummaries(collapseCtrl, activeFilterCount = 0) {
     layerShort = param ? param.label.split(" ")[0] : pId;
   }
   const palShort = PALETTE_SHORT_NAMES[state.palette] || state.palette;
-  collapseCtrl.setSummary("summary-layers", `${layerShort} • ${palShort}`, "accent");
+  collapseCtrl.setSummary("summary-layers", `${layerShort} · ${palShort}`, "accent");
 }

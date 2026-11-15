@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from isotopos.api.datastore import DataStore, get_default_datastore
-from isotopos.api.exporters import EXPORTERS, export_ranked_analogs
+from isotopos.api.exporters import export_ranked_analogs
 from isotopos.api.schemas import (
     ExportFormat,
     RankRequest,
@@ -19,17 +20,12 @@ from isotopos.api.schemas import (
     TargetExtractRequest,
     WeightEvaluateRequest,
 )
+from isotopos.core.models import PlanetaryBody
 from isotopos.core.registry import DEFAULT_REGISTRY
 from isotopos.scoring.llm_client import LLMClient, LLMConfigurationError, LLMProviderError
 from isotopos.scoring.mission_weights import evaluate_mission_weights
 
 __all__ = [
-    "DataStore",
-    "EXPORTERS",
-    "RankRequest",
-    "SiteInspectRequest",
-    "TargetExtractRequest",
-    "WeightEvaluateRequest",
     "app",
     "create_app",
 ]
@@ -65,6 +61,13 @@ def create_app(
             return FileResponse(index_path)
         return {"service": "iso-topos", "status": "ok"}
 
+    @application.get("/planetary", include_in_schema=False)
+    def serve_planetary_selector() -> Any:
+        planetary_path = static_dir / "planetary.html"
+        if planetary_path.exists():
+            return FileResponse(planetary_path)
+        raise HTTPException(status_code=404, detail="Planetary selector page not found.")
+
     @application.get("/api/v1/health")
     def health() -> dict[str, Any]:
         return {
@@ -74,27 +77,60 @@ def create_app(
             "preset_count": len(active_store.presets),
         }
 
+    def _cached_json_response(
+        request: Request,
+        cache_key: str,
+        payload_fn: Callable[[], Any],
+    ) -> Response:
+        raw_bytes, gz_bytes = active_store.get_cached_json_payload(cache_key, payload_fn)
+        accept_encoding = request.headers.get("accept-encoding", "")
+        if "gzip" in accept_encoding.lower():
+            return Response(
+                content=gz_bytes,
+                media_type="application/json",
+                headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"},
+            )
+        return Response(
+            content=raw_bytes,
+            media_type="application/json",
+            headers={"Vary": "Accept-Encoding"},
+        )
+
     @application.get("/api/v1/metadata")
-    def get_metadata() -> dict[str, Any]:
-        return {
-            "dimensions": [d.model_dump() for d in DEFAULT_REGISTRY.dimensions],
-            "parameters": [p.model_dump() for p in DEFAULT_REGISTRY.parameters],
-            "presets": [p.model_dump() for p in active_store.presets],
-            "hotspots": [h.model_dump() for h in active_store.hotspots],
-        }
+    def get_metadata(request: Request) -> Response:
+        return _cached_json_response(
+            request,
+            "metadata",
+            lambda: {
+                "dimensions": [d.model_dump() for d in DEFAULT_REGISTRY.dimensions],
+                "parameters": [p.model_dump() for p in DEFAULT_REGISTRY.parameters],
+                "presets": [p.model_dump() for p in active_store.presets],
+                "hotspots": [h.model_dump() for h in active_store.hotspots],
+            },
+        )
 
     @application.get("/api/v1/earth-grid")
-    def get_earth_grid() -> JSONResponse:
-        return JSONResponse(content=active_store.earth_geojson)
+    def get_earth_grid(request: Request) -> Response:
+        return _cached_json_response(request, "earth_grid", lambda: active_store.earth_geojson)
 
     @application.get("/api/v1/earth-grid/parameter/{param_id}")
-    def get_earth_grid_parameter(param_id: str) -> dict[str, Any]:
+    def get_earth_grid_parameter(param_id: str, request: Request) -> Response:
         if param_id not in active_store.h3_prepacked.param_col_index:
             raise HTTPException(status_code=404, detail=f"Unknown parameter_id '{param_id}'")
-        return {
-            "parameter_id": param_id,
-            "values": active_store.h3_prepacked.get_parameter_map(param_id),
-        }
+        return _cached_json_response(
+            request,
+            f"earth_param:{param_id}",
+            lambda: {
+                "parameter_id": param_id,
+                "values": active_store.h3_prepacked.get_parameter_map(param_id),
+            },
+        )
+
+    @application.get("/api/v1/planetary-grid/{body}/parameter/{param_id}")
+    def get_planetary_grid_parameter(body: PlanetaryBody, param_id: str) -> dict[str, Any]:
+        if param_id not in active_store.h3_prepacked.param_col_index:
+            raise HTTPException(status_code=404, detail=f"Unknown parameter_id '{param_id}'")
+        return active_store.interpolator.get_grid_parameter_slice(body=body, param_id=param_id)
 
     @application.post("/api/v1/target/extract")
     def extract_target(req: TargetExtractRequest) -> dict[str, Any]:
@@ -139,10 +175,14 @@ def create_app(
             top_k=None,
             include_dimension_scores=False,
         )
+        excluded_h3 = int(active_store.h3_prepacked.well_known_mask.sum()) if req.exclude_well_known else 0
+        excluded_hs = int(active_store.hotspot_prepacked.well_known_mask.sum()) if req.exclude_well_known else 0
         return {
             "all_weights_zero": h3_eval.all_weights_zero,
             "total_h3_evaluated": h3_eval.total_candidates_evaluated,
             "filtered_h3_count": h3_eval.filtered_site_count,
+            "excluded_well_known_h3_count": excluded_h3,
+            "excluded_well_known_hotspot_count": excluded_hs,
             "cell_scores": h3_eval.cell_scores,
             "cell_dimension_scores": h3_eval.cell_dimension_scores,
             "top_h3_results": [r.model_dump() for r in h3_eval.ranked_results],
@@ -205,6 +245,7 @@ def create_app(
             filters=req.filters,
             exclude_well_known=req.exclude_well_known,
             top_k=req.top_k,
+            include_cell_scores=False,
         )
         combined = sorted(
             [*hotspot_eval.ranked_results, *h3_eval.ranked_results],
