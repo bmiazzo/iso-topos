@@ -7,6 +7,9 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+.env
+.env.*
+!.env.example
 
 # Offline-fetched open datasets in data/raw/ (large rasters/archives excluded; small Natural Earth files tracked)
 data/raw/*
