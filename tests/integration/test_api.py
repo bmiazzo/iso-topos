@@ -409,3 +409,34 @@ def test_cached_json_endpoints_return_etag_cache_control_and_304():
         assert resp_304.content == b""
 
 
+def test_rank_gzip_uses_fast_compression_and_stays_under_budget():
+    """NFR-1: GZipMiddleware uses fast compresslevel=1 so gzipped /api/v1/rank stays responsive."""
+    import time
+
+    app = create_app()
+    gzip_mw = [m for m in app.user_middleware if m.cls.__name__ == "GZipMiddleware"]
+    assert gzip_mw, "Expected GZipMiddleware to be registered"
+    assert gzip_mw[0].kwargs.get("compresslevel") == 1
+
+    client = TestClient(app)
+    preset = client.post("/api/v1/target/extract", json={"preset_id": "shackleton_rim"}).json()
+    payload = {
+        "target": preset,
+        "weights": preset["recommended_weights"],
+        "mode": "clamped",
+        "exclude_well_known": False,
+        "top_k": 15,
+    }
+    # Warm up
+    client.post("/api/v1/rank", json=payload, headers={"Accept-Encoding": "gzip"})
+
+    t0 = time.perf_counter()
+    resp = client.post("/api/v1/rank", json=payload, headers={"Accept-Encoding": "gzip"})
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+
+    assert resp.status_code == 200
+    assert resp.headers.get("content-encoding") == "gzip"
+    assert elapsed_ms < 250.0, f"Gzipped /api/v1/rank took {elapsed_ms:.1f} ms"
+
+
+

@@ -25,6 +25,8 @@ let _cachedGeojsonRef = null;
 let _siteCoordsById = new Map();
 let _sitePropsById = new Map();
 let _pushedDisplayVals = new Map();
+let _displayDataVersion = 0;
+let _lastColorRange = { minVal: 0, maxVal: 100 };
 
 function ensureGeojsonIndexes() {
   if (_cachedGeojsonRef !== state.earthGeojson) {
@@ -636,6 +638,26 @@ async function ensureRawParameterLoaded(paramId) {
   return state.rawParamCache[paramId];
 }
 
+export function updateEarthHexOpacity() {
+  if (!state.map || !state.mapReady || !state.map.getLayer("earth-h3-fill")) {
+    return;
+  }
+  const isScoreLayer = !state.activeLayer.startsWith("raw:");
+  const effectiveCutoff = isScoreLayer ? state.minScoreFilter : -99999;
+  const valExpr = ["coalesce", ["feature-state", "display_val"], -999999];
+  const dimWellKnown = isScoreLayer && state.excludeWellKnown;
+  const opacityExpr = buildFillOpacityExpression({
+    valExpr,
+    isScoreLayer,
+    effectiveCutoff,
+    hexOpacity: state.hexOpacity,
+    minVal: _lastColorRange.minVal,
+    maxVal: _lastColorRange.maxVal,
+    dimWellKnown,
+  });
+  state.map.setPaintProperty("earth-h3-fill", "fill-opacity", opacityExpr);
+}
+
 export async function updateEarthMapLayers(updateData = true) {
   if (!state.map || !state.mapReady || !state.map.getLayer("earth-h3-fill") || !state.lastRankResponse) {
     return;
@@ -692,6 +714,7 @@ export async function updateEarthMapLayers(updateData = true) {
         state.map.setFeatureState({ source: "earth-h3", id }, { display_val: val });
       }
     }
+    _displayDataVersion += 1;
   }
 
   const effectiveCutoff = isScoreLayer ? state.minScoreFilter : -99999;
@@ -702,7 +725,9 @@ export async function updateEarthMapLayers(updateData = true) {
     effectiveCutoff,
     scaleMode: state.scaleMode,
     paramSpec,
+    dataVersion: _displayDataVersion,
   });
+  _lastColorRange = { minVal, maxVal };
 
   if (layerKey.startsWith("dim:") && validCount === 0 && Object.keys(cell_scores).length > 0) {
     legendTitle = `${legendTitle} — N/A (0% weights)`;

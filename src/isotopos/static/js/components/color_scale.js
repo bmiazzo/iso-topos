@@ -64,6 +64,9 @@ function quantile(sorted, q) {
   return sorted[base];
 }
 
+let _cachedRangeKey = null;
+let _cachedRangeResult = null;
+
 export function computeLayerColorRange({
   features,
   cellDisplayValues,
@@ -71,7 +74,16 @@ export function computeLayerColorRange({
   effectiveCutoff,
   scaleMode,
   paramSpec,
+  dataVersion,
 }) {
+  const cacheKey =
+    dataVersion !== undefined
+      ? `${dataVersion}|${isScoreLayer}|${effectiveCutoff}|${scaleMode}|${paramSpec?.id || ""}`
+      : null;
+  if (cacheKey !== null && cacheKey === _cachedRangeKey && _cachedRangeResult) {
+    return _cachedRangeResult;
+  }
+
   const needsQuantiles = scaleMode === "auto";
   const vals = needsQuantiles ? new Float64Array(features.length) : null;
   let validCount = 0;
@@ -137,7 +149,7 @@ export function computeLayerColorRange({
       ? minVal + ((Math.sqrt(1 + LOG_SCALE_K) - 1) / LOG_SCALE_K) * (maxVal - minVal)
       : (minVal + maxVal) / 2;
 
-  return {
+  const result = {
     minVal,
     midVal,
     maxVal,
@@ -146,6 +158,11 @@ export function computeLayerColorRange({
     isClipped,
     validCount,
   };
+  if (cacheKey !== null) {
+    _cachedRangeKey = cacheKey;
+    _cachedRangeResult = result;
+  }
+  return result;
 }
 
 export function updateLegendLabels({

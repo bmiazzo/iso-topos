@@ -42,7 +42,7 @@ def create_app(
         description="Planetary-to-Earth Analog Discovery & Characterization Engine",
         version="0.2.0",
     )
-    application.add_middleware(GZipMiddleware, minimum_size=1000)
+    application.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=1)
 
     active_store = (
         store

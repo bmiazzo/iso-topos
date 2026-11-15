@@ -28,6 +28,7 @@ import {
   requestAutoSpinFrame,
   resizeEarthMap,
   startAutoSpinLoop,
+  updateEarthHexOpacity,
   updateEarthMapLayers,
   updateLegendGradient,
 } from "./js/components/globe_map.js";
@@ -265,13 +266,19 @@ function bindUIEvents() {
   document.getElementById("hex-opacity").addEventListener("input", (e) => {
     state.hexOpacity = parseFloat(e.target.value);
     document.getElementById("hex-opacity-lbl").textContent = `${Math.round(state.hexOpacity * 100)}%`;
-    updateEarthMapLayers(false);
+    updateEarthHexOpacity();
   });
 
+  let minScoreRaf = 0;
   document.getElementById("min-score-filter").addEventListener("input", (e) => {
     state.minScoreFilter = parseInt(e.target.value, 10) || 0;
     document.getElementById("min-score-lbl").textContent = `${state.minScoreFilter}%`;
-    updateEarthMapLayers(false);
+    if (!minScoreRaf) {
+      minScoreRaf = requestAnimationFrame(() => {
+        minScoreRaf = 0;
+        updateEarthMapLayers(false);
+      });
+    }
   });
 
   document.getElementById("chk-show-hotspots").addEventListener("change", (e) => {
